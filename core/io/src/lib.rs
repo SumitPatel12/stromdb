@@ -1,6 +1,8 @@
 /*
-This is an implementation of SimpleDB from the book: https://www.amazon.in/Database-Design-Implementation-Data-Centric-Applications/dp/3030338355
+This is an implementation of SimpleDB from the book "Database Design Implementation Data Centric Applications"
 This is going to be the library we use for file management in the StormDB. The name StormDB cause I know there is going to be a storm of bugs. :laughing_face_emote:
+P.S. I wrote the :emote: thing knowingly, it doesn't render as an emote in my editor either. :stuck_out_tongue:.
+P.P.S I konw my jokes are horrible, hopefully better than my code.
 
 The api as per the book will be:
     1. BlockMetadata that'll handle block related operations. I like this name better. Don't know id just didn't seem right.

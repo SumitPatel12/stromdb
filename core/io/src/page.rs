@@ -1,3 +1,4 @@
+// TODO: Write better doc comments for the functions.
 use crate::error::StormDbError;
 
 // Should we have some more data here? Block size, max page size, metadata?
@@ -15,7 +16,9 @@ impl Page {
         PageBuilder::new()
     }
 
-    /// Reads and returns an i32 from the given offset if present, None otherwise.
+    // Okay after going for varint this might very likely become irrelevant :woozy_face:
+    // I'll still keep this maybe I'll provide a data-type for i32 who knows.
+    /// Reads and returns an `i32` from the given offset if present, None otherwise.
     pub fn get_int(&self, offset: usize) -> Result<Option<i32>, StormDbError> {
         if offset > self.block_size {
             return Err(StormDbError::IndexOutOfBound(offset, self.block_size));
@@ -38,7 +41,7 @@ impl Page {
         )))
     }
 
-    /// Puts the provided integer value at the given offset.
+    /// Puts the provided `i32` at the given offset.
     pub fn set_int(&mut self, offset: usize, value: i32) -> Result<(), StormDbError> {
         if offset > self.block_size {
             return Err(StormDbError::IndexOutOfBound(offset, self.block_size));
@@ -63,6 +66,17 @@ impl Page {
         // if offset + bytes.len() > self.block_size {
         //     return Err();
         // }
+
+        let (varint, sz) = read_varint(&self.byte_buffer[offset..])?;
+        match self
+            .byte_buffer
+            // TODO: This can likely be incorrect, for 32 bit systems usize is gonna be 32 while the varint can be 64.
+            // We're gonna have to revisit this, possibley overflow pages will solve this. Page size is quite small compared to 32-bit max so I'm hoping that'd do the trick.
+            .get((offset + sz)..(offset + varint as usize))
+        {
+            Some(bytes) => Ok(bytes.into()),
+            None => return Err(StormDbError::Corrupt("Invalid String.".to_string())),
+        }
     }
 
     /// Sets/Overwrites the slice of the buffer from offset to offset + bytes.len() by the provided bytes.
@@ -158,7 +172,7 @@ pub fn read_varint(buffer: &[u8]) -> Result<(u64, usize), StormDbError> {
                     return Ok((varint, i + 1));
                 }
             }
-            None => return Err(StormDbError::InvalidVarint),
+            None => return Err(StormDbError::Corrupt("Invalid Varint.".to_string())),
         }
     }
 
@@ -166,7 +180,7 @@ pub fn read_varint(buffer: &[u8]) -> Result<(u64, usize), StormDbError> {
         varint = (varint << 8) + (*last_byte as u64);
         Ok((varint, 9))
     } else {
-        return Err(StormDbError::InvalidVarint);
+        return Err(StormDbError::Corrupt("Invalid Varint.".to_string()));
     }
 }
 
@@ -214,6 +228,26 @@ pub fn write_varint(buffer: &mut [u8], value: u64) -> usize {
     }
 
     current_varint_size
+}
+
+// Prolly not going to use it, implemented as an exercies. :shrug:
+/// Calculates the varint size for the given value.
+pub fn get_varint_len(value: u64) -> usize {
+    if value <= 0x7f {
+        return 1;
+    }
+
+    if (value & ((0xff000000_u64) << 32)) > 0 {
+        return 9;
+    }
+
+    let mut value = value;
+    let mut n = 0;
+    while value != 0 {
+        value >>= 7;
+        n += 1;
+    }
+    n
 }
 
 // TODO: Write Tests and also pass the function through a fuzzer just in case we need the encoded varint array to be of size 10, and the fuzzer finds something.
