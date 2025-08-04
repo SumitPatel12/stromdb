@@ -170,12 +170,50 @@ pub fn read_varint(buffer: &[u8]) -> Result<(u64, usize), StormDbError> {
     }
 }
 
-/// Writes a varint given the buffer
+/// Writes a varint to the given buffer and returns the length of the varint written.
 pub fn write_varint(buffer: &mut [u8], value: u64) -> usize {
     if value <= 0x7f {
         buffer[0] = (value & 0x7f) as u8;
         return 1;
     }
 
-    let mut varint = value;
+    let mut value = value;
+
+    // If any of the bits from 63-56 are set we know for sure it's going to be 9 bytes varint.
+    if (value & ((0xff000000_u64) << 32)) > 0 {
+        // Big endian so we start assigning from 9th bit towards the 1st one.
+        buffer[8] = value as u8;
+        value >>= 8;
+
+        for i in (1..8).rev() {
+            // Take the 7 least significant bits and set the 8th one to 1.
+            buffer[i] = ((value & 0x7f) | 0x80) as u8;
+            value >>= 7;
+        }
+
+        return 9;
+    }
+
+    // Since max size is 9 initializing by that amount.
+    let mut encoded_varint = [0u8; 9];
+    let mut current_varint_size = 0;
+
+    // As long as the value is still non-zero we will keep taking 7 bytes off of the value and assigning them to the encoded_varint array.
+    while value > 0 {
+        // Take the 7 least significant bits and set the 8th one to 1.
+        let byte = (value & 0x7f) | 0x80;
+        encoded_varint[current_varint_size] = byte as u8;
+
+        value >>= 7;
+        current_varint_size += 1;
+    }
+
+    // Now since we are going BE (big endian), we'll have to assign the encoded varint to the buffer in reverse order.
+    for i in 0..current_varint_size {
+        buffer[i] = encoded_varint[current_varint_size - i - 1];
+    }
+
+    current_varint_size
 }
+
+// TODO: Write Tests and also pass the function through a fuzzer just in case we need the encoded varint array to be of size 10, and the fuzzer finds something.
