@@ -79,9 +79,10 @@ impl Page {
         }
     }
 
-    /// Sets/Overwrites the slice of the buffer from offset to offset + bytes.len() by the provided bytes.
+    /// Writes the payload as the size of the payload as a `varint` followed by the actual payload at the given offset.
     pub fn set_bytes(&mut self, offset: usize, bytes: Vec<u8>) -> Result<(), StormDbError> {
-        if offset > self.block_size {
+        let bytes_len = bytes.len();
+        if offset + bytes_len > self.block_size {
             return Err(StormDbError::IndexOutOfBound(offset, self.block_size));
         }
 
@@ -90,7 +91,15 @@ impl Page {
         //     return Err();
         // }
 
-        self.byte_buffer[offset..offset + Self::I32_SIZE].copy_from_slice(&bytes);
+        let sz = get_varint_len(bytes_len as u64);
+        // String won't fit onto the page so we reutrn an error.
+        if offset + bytes_len + sz > self.block_size {
+            return Err(StormDbError::IndexOutOfBound(offset, self.block_size));
+        }
+
+        // Write the lenght of the payload as a varint followed by the payload itself.
+        write_varint(&mut self.byte_buffer[offset..], bytes_len as u64);
+        self.byte_buffer[offset + sz..offset + bytes_len].copy_from_slice(&bytes);
 
         Ok(())
     }
@@ -103,6 +112,14 @@ impl Page {
 // This might rub some people the wrong way but my C#(that's what I write for my day job :rolling_on_the_floor_laughing:) instincts are telling me to go with a builder,
 // so that's what I'm gonna do. I don't get the hate against this. Builders makes it so much easier to setup and execute tests, also chaining methods to make the whole object
 // in one go is goated (bite me :stuck_out_tongue:)
+/// Builder for the struct `Page`.
+/// Use:
+/// ```
+/// Page::builder()
+///      .block_size(desired_block_size)
+///      .with_buffer()
+///      .build();
+/// ```
 struct PageBuilder {
     block_size: usize,
     byte_buffer: Vec<u8>,
