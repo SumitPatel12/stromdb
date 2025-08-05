@@ -1,3 +1,5 @@
+use std::string;
+
 // TODO: Write better doc comments for the functions.
 use crate::error::StormDbError;
 
@@ -102,6 +104,30 @@ impl Page {
         self.byte_buffer[offset + sz..offset + bytes_len].copy_from_slice(&bytes);
 
         Ok(())
+    }
+
+    /// Read the string from the given offset. Returns a string if present, and an error otherwise.
+    pub fn get_string(&self, offset: usize) -> Result<String, StormDbError> {
+        let string_bytes = self.get_bytes(offset)?;
+        Ok(String::from_utf8(string_bytes).map_err(|_| StormDbError::InvalidUtf8)?)
+    }
+
+    /// Write the string to the given offset.
+    pub fn set_string(&mut self, offset: usize, value: String) -> Result<(), StormDbError> {
+        let string_bytes = value.into_bytes();
+        self.set_bytes(offset, string_bytes)?;
+        Ok(())
+    }
+
+    /// Returns an immutable reference to the byte_buffer of the Page.
+    pub fn bytes(&self) -> &[u8] {
+        &self.byte_buffer
+    }
+
+    /// Returns the maximum lenght in bytes storing a string would take.
+    pub fn max_len(string: &str) -> usize {
+        let string_bytes = string.as_bytes();
+        get_varint_len(string_bytes.len() as u64) + string_bytes.len()
     }
 }
 
