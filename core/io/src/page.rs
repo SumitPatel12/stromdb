@@ -1,13 +1,12 @@
-use std::string;
-
 // TODO: Write better doc comments for the functions.
 use crate::error::StormDbError;
 
 // Should we have some more data here? Block size, max page size, metadata?
 // Yup, the block size is passed as a paramater to one of the constructor methods. I'd rather it be a part of the page itself.
 pub struct Page {
-    block_size: usize,
-    byte_buffer: Vec<u8>,
+    // pub(crate) cause I don't want the file manager calling stupid getters and setters.
+    pub(crate) block_size: usize,
+    pub(crate) byte_buffer: Vec<u8>,
 }
 
 impl Page {
@@ -146,7 +145,7 @@ impl Page {
 ///      .with_buffer()
 ///      .build();
 /// ```
-struct PageBuilder {
+pub struct PageBuilder {
     block_size: usize,
     byte_buffer: Vec<u8>,
 }
