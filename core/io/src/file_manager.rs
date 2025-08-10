@@ -23,6 +23,7 @@ pub struct FileManager {
     block_size: usize,
     is_new: bool,
     open_files: HashMap<String, File>,
+    stats: IOStats,
 }
 
 impl FileManager {
@@ -56,6 +57,7 @@ impl FileManager {
             block_size,
             is_new,
             open_files: HashMap::new(),
+            stats: IOStats::new(),
         })
     }
 
@@ -121,5 +123,36 @@ impl FileManager {
         file.seek(std::io::SeekFrom::End(0))?;
         file.write(&bytes)?;
         Ok(block)
+    }
+}
+
+pub struct IOStats {
+    blocks_read: u64,
+    blocks_written: u64,
+}
+
+// TODO: Implement something in the commit and transaction logics that would keep these values up-to-date.
+impl IOStats {
+    pub fn new() -> Self {
+        IOStats {
+            blocks_read: 0,
+            blocks_written: 0,
+        }
+    }
+
+    pub fn blocks_read(&self) -> u64 {
+        self.blocks_read
+    }
+
+    pub fn blocks_written(&self) -> u64 {
+        self.blocks_written
+    }
+
+    pub fn set_blocks_read(&mut self, blocks_read: u64) {
+        self.blocks_read = blocks_read;
+    }
+
+    pub fn set_blocks_write(&mut self, blocks_written: u64) {
+        self.blocks_written = blocks_written;
     }
 }
