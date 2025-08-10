@@ -21,14 +21,14 @@ impl Page {
     // I'll still keep this maybe I'll provide a data-type for i32 who knows.
     /// Reads and returns an `i32` from the given offset if present, None otherwise.
     pub fn get_int(&self, offset: usize) -> Result<i32> {
-        if offset > self.block_size {
+        if offset >= self.block_size {
             return Err(StormDbError::IndexOutOfBound(offset, self.block_size));
         }
 
         // Initially used 4 directly, but since the language gives us a method I thought of using that. Maybe decreasing a function call would yield better performance?
         // Don't ask me how much time went into finding the syntax of std::mem::size_of::<i32>()
         // AI sometimes does give good suggestions.
-        if offset + Self::I32_SIZE > self.block_size {
+        if offset + Self::I32_SIZE >= self.block_size {
             return Err(StormDbError::OutOfBound(
                 "Reached end of file before reading the complete int value.".to_string(),
             ));
@@ -46,11 +46,11 @@ impl Page {
 
     /// Puts the provided `i32` at the given offset.
     pub fn set_int(&mut self, offset: usize, value: i32) -> Result<()> {
-        if offset > self.block_size {
+        if offset >= self.block_size {
             return Err(StormDbError::IndexOutOfBound(offset, self.block_size));
         }
 
-        if offset + Self::I32_SIZE > self.block_size {
+        if offset + Self::I32_SIZE >= self.block_size {
             return Err(StormDbError::OutOfBound(
                 "Reached end of file before writing the complete int value.".to_string(),
             ));
@@ -62,16 +62,21 @@ impl Page {
 
     /// Reads bytes from the given offset.
     pub fn get_bytes(&self, offset: usize) -> Result<Vec<u8>> {
-        if offset > self.block_size {
+        if offset >= self.block_size {
             return Err(StormDbError::IndexOutOfBound(offset, self.block_size));
         }
 
-        // TODO: Add some error for this case as well.
-        // if offset + bytes.len() > self.block_size {
-        //     return Err();
-        // }
-
         let (varint, sz) = read_varint(&self.byte_buffer[offset..])?;
+
+        if offset + Self::I32_SIZE >= self.block_size {
+            return Err(StormDbError::OutOfBound(format!(
+                "Cannot read {} bytes from offset {}. Last index is {}",
+                sz,
+                offset,
+                self.block_size - 1
+            )));
+        }
+
         match self
             .byte_buffer
             // TODO: This can likely be incorrect, for 32 bit systems usize is gonna be 32 while the varint can be 64.
@@ -86,18 +91,19 @@ impl Page {
     /// Writes the payload as the size of the payload as a `varint` followed by the actual payload at the given offset.
     pub fn set_bytes(&mut self, offset: usize, bytes: Vec<u8>) -> Result<()> {
         let bytes_len = bytes.len();
-        if offset + bytes_len > self.block_size {
+        if offset + bytes_len >= self.block_size {
             return Err(StormDbError::IndexOutOfBound(offset, self.block_size));
         }
 
-        // TODO: Add some error for this case as well.
-        // if offset + bytes.len() > self.block_size {
-        //     return Err();
-        // }
+        if offset + Self::I32_SIZE >= self.block_size {
+            return Err(StormDbError::OutOfBound(
+                "Insufficient space to write given bytes".to_string(),
+            ));
+        }
 
         let sz = get_varint_len(bytes_len as u64);
         // String won't fit onto the page so we reutrn an error.
-        if offset + bytes_len + sz > self.block_size {
+        if offset + bytes_len + sz >= self.block_size {
             return Err(StormDbError::IndexOutOfBound(offset, self.block_size));
         }
 
@@ -124,7 +130,7 @@ impl Page {
     // Booleans are gonna be 1 byte internally, maybe down the line bit packing might be something I look into.
     /// Reads a boolean value from the given offset.
     pub fn get_bool(&self, offset: usize) -> Result<bool> {
-        if offset > self.block_size {
+        if offset >= self.block_size {
             return Err(StormDbError::IndexOutOfBound(offset, self.block_size));
         }
 
@@ -137,7 +143,7 @@ impl Page {
 
     /// Writes a boolean value to the given offset.
     pub fn set_bool(&mut self, offset: usize, value: bool) -> Result<()> {
-        if offset > self.block_size {
+        if offset >= self.block_size {
             return Err(StormDbError::IndexOutOfBound(offset, self.block_size));
         }
 
