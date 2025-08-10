@@ -1,19 +1,24 @@
 use std::error::Error;
-use std::fmt::{Display, Formatter, Result};
+use std::fmt::{Display, Formatter};
+
+/// Custom Result type for StormDB operations
+pub type Result<T> = std::result::Result<T, StormDbError>;
 
 #[derive(Debug)]
 pub enum StormDbError {
+    OutOfBound(String),
     IndexOutOfBound(usize, usize),
     Corrupt(String),
     InvalidUtf8,
     // Doesn't seem like it'd be easy to use ngl. Wrapping a std error in my own one. But this makes the code a bit simpler so I'll roll with it for now.
     IOError(std::io::Error),
+    InvalidBool,
 }
 
 impl Error for StormDbError {}
 
 impl Display for StormDbError {
-    fn fmt(&self, f: &mut Formatter) -> Result {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
             Self::IndexOutOfBound(idx, max_idx) => {
                 write!(f, "Index out of bounds {}. Max index: {}", idx, max_idx)
@@ -21,6 +26,8 @@ impl Display for StormDbError {
             StormDbError::Corrupt(message) => write!(f, "{}", message),
             StormDbError::InvalidUtf8 => write!(f, "Invalid UTF8"),
             StormDbError::IOError(error) => write!(f, "{}", error),
+            StormDbError::InvalidBool => write!(f, "Invalid Boolean."),
+            StormDbError::OutOfBound(msg) => write!(f, "{}", msg),
         }
     }
 }

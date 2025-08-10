@@ -1,5 +1,5 @@
 // TODO: Write better doc comments for the functions.
-use crate::error::StormDbError;
+use crate::error::{Result, StormDbError};
 
 // Should we have some more data here? Block size, max page size, metadata?
 // Yup, the block size is passed as a paramater to one of the constructor methods. I'd rather it be a part of the page itself.
@@ -20,7 +20,7 @@ impl Page {
     // Okay after going for varint this might very likely become irrelevant :woozy_face:
     // I'll still keep this maybe I'll provide a data-type for i32 who knows.
     /// Reads and returns an `i32` from the given offset if present, None otherwise.
-    pub fn get_int(&self, offset: usize) -> Result<Option<i32>, StormDbError> {
+    pub fn get_int(&self, offset: usize) -> Result<i32> {
         if offset > self.block_size {
             return Err(StormDbError::IndexOutOfBound(offset, self.block_size));
         }
@@ -29,36 +29,39 @@ impl Page {
         // Don't ask me how much time went into finding the syntax of std::mem::size_of::<i32>()
         // AI sometimes does give good suggestions.
         if offset + Self::I32_SIZE > self.block_size {
-            return Ok(None);
+            return Err(StormDbError::OutOfBound(
+                "Reached end of file before reading the complete int value.".to_string(),
+            ));
         }
 
         // If you use from_le_bytes, *you're a maniac* and I'd love to talk to you about why you choose that.
-        Ok(Some(i32::from_be_bytes(
+        Ok(i32::from_be_bytes(
             // I don't think this should fail. (Famous Last Words)
             // Down the line I'll see if unwraping should be removed for some manual checks.
             self.byte_buffer[offset..offset + Self::I32_SIZE]
                 .try_into()
                 .unwrap(),
-        )))
+        ))
     }
 
     /// Puts the provided `i32` at the given offset.
-    pub fn set_int(&mut self, offset: usize, value: i32) -> Result<(), StormDbError> {
+    pub fn set_int(&mut self, offset: usize, value: i32) -> Result<()> {
         if offset > self.block_size {
             return Err(StormDbError::IndexOutOfBound(offset, self.block_size));
         }
 
-        // TODO: Add some error for this case as well.
-        // if offset + Self::I32_SIZE > self.block_size {
-        //     return Err();
-        // }
+        if offset + Self::I32_SIZE > self.block_size {
+            return Err(StormDbError::OutOfBound(
+                "Reached end of file before writing the complete int value.".to_string(),
+            ));
+        }
 
         self.byte_buffer[offset..offset + Self::I32_SIZE].copy_from_slice(&value.to_be_bytes());
         Ok(())
     }
 
     /// Reads bytes from the given offset.
-    pub fn get_bytes(&self, offset: usize) -> Result<Vec<u8>, StormDbError> {
+    pub fn get_bytes(&self, offset: usize) -> Result<Vec<u8>> {
         if offset > self.block_size {
             return Err(StormDbError::IndexOutOfBound(offset, self.block_size));
         }
@@ -81,7 +84,7 @@ impl Page {
     }
 
     /// Writes the payload as the size of the payload as a `varint` followed by the actual payload at the given offset.
-    pub fn set_bytes(&mut self, offset: usize, bytes: Vec<u8>) -> Result<(), StormDbError> {
+    pub fn set_bytes(&mut self, offset: usize, bytes: Vec<u8>) -> Result<()> {
         let bytes_len = bytes.len();
         if offset + bytes_len > self.block_size {
             return Err(StormDbError::IndexOutOfBound(offset, self.block_size));
@@ -106,15 +109,39 @@ impl Page {
     }
 
     /// Read the string from the given offset. Returns a string if present, and an error otherwise.
-    pub fn get_string(&self, offset: usize) -> Result<String, StormDbError> {
+    pub fn get_string(&self, offset: usize) -> Result<String> {
         let string_bytes = self.get_bytes(offset)?;
         Ok(String::from_utf8(string_bytes).map_err(|_| StormDbError::InvalidUtf8)?)
     }
 
     /// Write the string to the given offset.
-    pub fn set_string(&mut self, offset: usize, value: String) -> Result<(), StormDbError> {
+    pub fn set_string(&mut self, offset: usize, value: String) -> Result<()> {
         let string_bytes = value.into_bytes();
         self.set_bytes(offset, string_bytes)?;
+        Ok(())
+    }
+
+    // Booleans are gonna be 1 byte internally, maybe down the line bit packing might be something I look into.
+    /// Reads a boolean value from the given offset.
+    pub fn get_bool(&self, offset: usize) -> Result<bool> {
+        if offset > self.block_size {
+            return Err(StormDbError::IndexOutOfBound(offset, self.block_size));
+        }
+
+        match self.byte_buffer[offset] {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(StormDbError::InvalidBool),
+        }
+    }
+
+    /// Writes a boolean value to the given offset.
+    pub fn set_bool(&mut self, offset: usize, value: bool) -> Result<()> {
+        if offset > self.block_size {
+            return Err(StormDbError::IndexOutOfBound(offset, self.block_size));
+        }
+
+        self.byte_buffer[offset] = value as u8;
         Ok(())
     }
 
@@ -197,7 +224,7 @@ impl PageBuilder {
 // What I implemented: https://github.com/SumitPatel12/sand/blob/c93298270a7bc5199cc83997dccfba992d5756f5/src/page/file_structures.rs#L432
 // Then I decided to check turso for their implementation and look over what could be improved. This one is from truso.
 /// Reads a big endian varint starting from the first byte of the byte slice.
-pub fn read_varint(buffer: &[u8]) -> Result<(u64, usize), StormDbError> {
+pub fn read_varint(buffer: &[u8]) -> Result<(u64, usize)> {
     let mut varint: u64 = 0;
 
     // The max size of the varint is 9 bytes, and the last byte would be taken as a whole value.

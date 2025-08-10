@@ -16,7 +16,7 @@ use std::{
     path::PathBuf,
 };
 
-use crate::{block_metadata::BlockMetadata, error::StormDbError, page::Page};
+use crate::{block_metadata::BlockMetadata, error::Result, page::Page};
 
 pub struct FileManager {
     db_directory: PathBuf,
@@ -29,7 +29,7 @@ pub struct FileManager {
 impl FileManager {
     // I think I'll go with Result here, there's a chance opening the directory fails or file creation fails, panicing doesn't seem like the right thing to do.
     /// Retruns a new FileManager struct.
-    pub fn new(db_directory: PathBuf, block_size: usize) -> Result<Self, StormDbError> {
+    pub fn new(db_directory: PathBuf, block_size: usize) -> Result<Self> {
         let is_new = !db_directory.exists();
         if is_new {
             // If we fail to create the directory panicing maybe makes sense.
@@ -72,7 +72,7 @@ impl FileManager {
     }
 
     /// Get's the file with the specified name from the open files if present. Otherwise opens the file and adds it to the open files hash. If file does not exist one is created.
-    fn get_file(&mut self, file_name: &str) -> Result<File, StormDbError> {
+    fn get_file(&mut self, file_name: &str) -> Result<File> {
         if let Some(file) = self.open_files.get(file_name) {
             // clone returns a reference. I was stuck on that for embarrassingly long time.
             Ok(file.try_clone()?)
@@ -90,7 +90,7 @@ impl FileManager {
     }
 
     /// Reads block into given page.
-    pub fn read(&mut self, block: BlockMetadata, page: &mut Page) -> Result<(), StormDbError> {
+    pub fn read(&mut self, block: BlockMetadata, page: &mut Page) -> Result<()> {
         let mut file = self.get_file(&block.file_name())?;
         file.seek(std::io::SeekFrom::Start(
             (block.block_number() * page.block_size) as u64,
@@ -102,7 +102,7 @@ impl FileManager {
     }
 
     /// Writes block to the file.
-    pub fn write(&mut self, block: BlockMetadata, page: &mut Page) -> Result<(), StormDbError> {
+    pub fn write(&mut self, block: BlockMetadata, page: &mut Page) -> Result<()> {
         let mut file = self.get_file(&block.file_name())?;
         file.seek(std::io::SeekFrom::Start(
             (block.block_number() * page.block_size) as u64,
@@ -113,7 +113,7 @@ impl FileManager {
     }
 
     /// Appends the block to the file.
-    pub fn append(&mut self, file_name: String) -> Result<BlockMetadata, StormDbError> {
+    pub fn append(&mut self, file_name: String) -> Result<BlockMetadata> {
         let mut file = self.get_file(&file_name)?;
         let file_metadata = file.metadata()?;
         let block_number = file_metadata.len() as usize / self.block_size;

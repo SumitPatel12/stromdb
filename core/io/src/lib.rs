@@ -20,3 +20,8 @@ mod block_metadata;
 mod error;
 mod file_manager;
 mod page;
+
+pub use block_metadata::BlockMetadata;
+pub use error::{Result, StormDbError};
+pub use file_manager::FileManager;
+pub use page::{Page, PageBuilder};
