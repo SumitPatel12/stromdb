@@ -20,9 +20,9 @@ impl Page {
     // Okay after going for varint this might very likely become irrelevant :woozy_face:
     // I'll still keep this maybe I'll provide a data-type for i32 who knows.
     /// Reads and returns an `i32` from the given offset if present, None otherwise.
-    pub fn get_int(&self, offset: usize) -> Result<i32> {
+    pub fn read_int(&self, offset: usize) -> Result<i32> {
         if offset >= self.block_size {
-            return Err(StormDbError::IndexOutOfBound(offset, self.block_size));
+            return Err(StormDbError::IndexOutOfBound(offset, self.block_size - 1));
         }
 
         // Initially used 4 directly, but since the language gives us a method I thought of using that. Maybe decreasing a function call would yield better performance?
@@ -45,9 +45,9 @@ impl Page {
     }
 
     /// Puts the provided `i32` at the given offset.
-    pub fn set_int(&mut self, offset: usize, value: i32) -> Result<()> {
+    pub fn write_int(&mut self, offset: usize, value: i32) -> Result<()> {
         if offset >= self.block_size {
-            return Err(StormDbError::IndexOutOfBound(offset, self.block_size));
+            return Err(StormDbError::IndexOutOfBound(offset, self.block_size - 1));
         }
 
         if offset + Self::I32_SIZE >= self.block_size {
@@ -61,9 +61,9 @@ impl Page {
     }
 
     /// Reads bytes from the given offset.
-    pub fn get_bytes(&self, offset: usize) -> Result<Vec<u8>> {
+    pub fn read_bytes(&self, offset: usize) -> Result<Vec<u8>> {
         if offset >= self.block_size {
-            return Err(StormDbError::IndexOutOfBound(offset, self.block_size));
+            return Err(StormDbError::IndexOutOfBound(offset, self.block_size - 1));
         }
 
         let (varint, sz) = read_varint(&self.byte_buffer[offset..])?;
@@ -89,10 +89,10 @@ impl Page {
     }
 
     /// Writes the payload as the size of the payload as a `varint` followed by the actual payload at the given offset.
-    pub fn set_bytes(&mut self, offset: usize, bytes: Vec<u8>) -> Result<()> {
+    pub fn write_bytes(&mut self, offset: usize, bytes: Vec<u8>) -> Result<()> {
         let bytes_len = bytes.len();
         if offset + bytes_len >= self.block_size {
-            return Err(StormDbError::IndexOutOfBound(offset, self.block_size));
+            return Err(StormDbError::IndexOutOfBound(offset, self.block_size - 1));
         }
 
         if offset + Self::I32_SIZE >= self.block_size {
@@ -104,7 +104,7 @@ impl Page {
         let sz = get_varint_len(bytes_len as u64);
         // String won't fit onto the page so we reutrn an error.
         if offset + bytes_len + sz >= self.block_size {
-            return Err(StormDbError::IndexOutOfBound(offset, self.block_size));
+            return Err(StormDbError::IndexOutOfBound(offset, self.block_size - 1));
         }
 
         // Write the lenght of the payload as a varint followed by the payload itself.
@@ -115,23 +115,23 @@ impl Page {
     }
 
     /// Read the string from the given offset. Returns a string if present, and an error otherwise.
-    pub fn get_string(&self, offset: usize) -> Result<String> {
-        let string_bytes = self.get_bytes(offset)?;
+    pub fn read_string(&self, offset: usize) -> Result<String> {
+        let string_bytes = self.read_bytes(offset)?;
         Ok(String::from_utf8(string_bytes).map_err(|_| StormDbError::InvalidUtf8)?)
     }
 
     /// Write the string to the given offset.
-    pub fn set_string(&mut self, offset: usize, value: String) -> Result<()> {
+    pub fn write_string(&mut self, offset: usize, value: String) -> Result<()> {
         let string_bytes = value.into_bytes();
-        self.set_bytes(offset, string_bytes)?;
+        self.write_bytes(offset, string_bytes)?;
         Ok(())
     }
 
     // Booleans are gonna be 1 byte internally, maybe down the line bit packing might be something I look into.
     /// Reads a boolean value from the given offset.
-    pub fn get_bool(&self, offset: usize) -> Result<bool> {
+    pub fn read_bool(&self, offset: usize) -> Result<bool> {
         if offset >= self.block_size {
-            return Err(StormDbError::IndexOutOfBound(offset, self.block_size));
+            return Err(StormDbError::IndexOutOfBound(offset, self.block_size - 1));
         }
 
         match self.byte_buffer[offset] {
@@ -142,9 +142,9 @@ impl Page {
     }
 
     /// Writes a boolean value to the given offset.
-    pub fn set_bool(&mut self, offset: usize, value: bool) -> Result<()> {
+    pub fn write_bool(&mut self, offset: usize, value: bool) -> Result<()> {
         if offset >= self.block_size {
-            return Err(StormDbError::IndexOutOfBound(offset, self.block_size));
+            return Err(StormDbError::IndexOutOfBound(offset, self.block_size - 1));
         }
 
         self.byte_buffer[offset] = value as u8;
@@ -173,8 +173,10 @@ impl Page {
 /// Builder for the struct `Page`.
 /// Use:
 /// ```
+/// use file_manager::Page;
+///
 /// Page::builder()
-///      .block_size(desired_block_size)
+///      .with_block_size(50)
 ///      .with_buffer()
 ///      .build();
 /// ```
@@ -326,3 +328,43 @@ pub fn get_varint_len(value: u64) -> usize {
 }
 
 // TODO: Write Tests and also pass the function through a fuzzer just in case we need the encoded varint array to be of size 10, and the fuzzer finds something.
+#[cfg(test)]
+mod test {
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    #[case(55, vec![0x00, 0x00, 0x00, 0x37])]
+    #[case(-55, vec![0xff, 0xff, 0xff, 0xC9])]
+    fn test_write_and_read_int(#[case] input: i32, #[case] output: Vec<u8>) -> Result<()> {
+        let mut page = PageBuilder::new().with_block_size(50).with_buffer().build();
+
+        page.write_int(5, input)?;
+        assert_eq!(page.bytes()[5..5 + Page::I32_SIZE].to_vec(), output);
+
+        assert_eq!(page.read_int(5)?, input);
+        Ok(())
+    }
+
+    #[rstest]
+    fn test_write_int_offset_out_of_bounds() {
+        let mut page = PageBuilder::new().with_block_size(50).with_buffer().build();
+        let err = page.write_int(55, 55);
+
+        assert_eq!(err, Err(StormDbError::IndexOutOfBound(55, 49)));
+    }
+
+    #[rstest]
+    fn test_write_int_offset_plus_size_out_of_bounds() {
+        let mut page = PageBuilder::new().with_block_size(50).with_buffer().build();
+        let err = page.write_int(48, 55);
+
+        assert_eq!(
+            err,
+            Err(StormDbError::OutOfBound(
+                "Reached end of file before writing the complete int value.".to_string()
+            ))
+        );
+    }
+}

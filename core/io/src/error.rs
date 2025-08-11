@@ -38,3 +38,21 @@ impl From<std::io::Error> for StormDbError {
         StormDbError::IOError(error)
     }
 }
+
+impl PartialEq for StormDbError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (StormDbError::OutOfBound(a), StormDbError::OutOfBound(b)) => a == b,
+            (StormDbError::IndexOutOfBound(a1, a2), StormDbError::IndexOutOfBound(b1, b2)) => {
+                a1 == b1 && a2 == b2
+            }
+            (StormDbError::Corrupt(a), StormDbError::Corrupt(b)) => a == b,
+            (StormDbError::InvalidUtf8, StormDbError::InvalidUtf8) => true,
+            (StormDbError::IOError(a), StormDbError::IOError(b)) => a.kind() == b.kind(),
+            (StormDbError::InvalidBool, StormDbError::InvalidBool) => true,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for StormDbError {}
