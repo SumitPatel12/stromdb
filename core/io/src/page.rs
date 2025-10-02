@@ -95,6 +95,7 @@ impl Page {
             return Err(StormDbError::IndexOutOfBound(offset, self.block_size - 1));
         }
 
+        // This shouldn't happen, hopefully.
         if offset + Self::I32_SIZE >= self.block_size {
             return Err(StormDbError::OutOfBound(
                 "Insufficient space to write given bytes".to_string(),
@@ -241,11 +242,11 @@ pub fn read_varint(buffer: &[u8]) -> Result<(u64, usize)> {
         match buffer.get(i) {
             Some(next_byte) => {
                 // Since we reached here we've got a value so shift the original one by 7 and add the next byte after clearing the MSB (most significant bit).
-                varint = varint >> 7 + (next_byte & 0x7f) as u64;
+                varint = (varint << 7) + (next_byte & 0x7f) as u64;
 
                 // I initially did next_byte < 0x80. Seemed logically correct. Don't know if using a bitwise and leads to any performance benefits.
                 // Tried it in c and the assembly has a cmp for less than version while the bitwise operation did not. Maybe that is the reason.
-                if next_byte & 0x80 == 0 {
+                if (next_byte & 0x80) == 0 {
                     return Ok((varint, i + 1));
                 }
             }
@@ -299,12 +300,55 @@ pub fn write_varint(buffer: &mut [u8], value: u64) -> usize {
         current_varint_size += 1;
     }
 
+    // The while loop above always sets the MSB(most significant bit) to 1, but it shouldn't be so for the last byte.
+    // So we're setting it back to 0.
+    encoded_varint[0] &= 0x7f;
     // Now since we are going BE (big endian), we'll have to assign the encoded varint to the buffer in reverse order.
     for i in 0..current_varint_size {
         buffer[i] = encoded_varint[current_varint_size - i - 1];
     }
 
     current_varint_size
+}
+
+/// SQLites implementation of the varint. Here only for testing purposes.
+pub fn write_varint_sqlite(buf: &mut [u8], value: u64) -> usize {
+    if value <= 0x7f {
+        buf[0] = (value & 0x7f) as u8;
+        return 1;
+    }
+
+    if value <= 0x3fff {
+        buf[0] = (((value >> 7) & 0x7f) | 0x80) as u8;
+        buf[1] = (value & 0x7f) as u8;
+        return 2;
+    }
+
+    let mut value = value;
+    if (value & ((0xff000000_u64) << 32)) > 0 {
+        buf[8] = value as u8;
+        value >>= 8;
+        for i in (0..8).rev() {
+            buf[i] = ((value & 0x7f) | 0x80) as u8;
+            value >>= 7;
+        }
+        return 9;
+    }
+
+    let mut encoded: [u8; 10] = [0; 10];
+    let mut bytes = value;
+    let mut n = 0;
+    while bytes != 0 {
+        let v = 0x80 | (bytes & 0x7f);
+        encoded[n] = v as u8;
+        bytes >>= 7;
+        n += 1;
+    }
+    encoded[0] &= 0x7f;
+    for i in 0..n {
+        buf[i] = encoded[n - 1 - i];
+    }
+    n
 }
 
 // Prolly not going to use it, implemented as an exercies. :shrug:
@@ -366,5 +410,116 @@ mod test {
                 "Reached end of file before writing the complete int value.".to_string()
             ))
         );
+    }
+
+    #[rstest]
+    #[case(true, 1u8)]
+    #[case(false, 0u8)]
+    fn test_write_and_read_bool(#[case] input: bool, #[case] expected_byte: u8) -> Result<()> {
+        let mut page = PageBuilder::new().with_block_size(50).with_buffer().build();
+
+        page.write_bool(5, input)?;
+        assert_eq!(page.bytes()[5], expected_byte);
+
+        assert_eq!(page.read_bool(5)?, input);
+        Ok(())
+    }
+
+    #[rstest]
+    fn test_write_bool_offset_out_of_bounds() {
+        let mut page = PageBuilder::new().with_block_size(50).with_buffer().build();
+        let err = page.write_bool(55, true);
+
+        assert_eq!(err, Err(StormDbError::IndexOutOfBound(55, 49)));
+    }
+
+    #[rstest]
+    fn test_read_bool_offset_out_of_bounds() {
+        let page = PageBuilder::new().with_block_size(50).with_buffer().build();
+        let err = page.read_bool(55);
+
+        assert_eq!(err, Err(StormDbError::IndexOutOfBound(55, 49)));
+    }
+
+    #[rstest]
+    #[case(2u8)]
+    #[case(255u8)]
+    #[case(128u8)]
+    fn test_read_bool_invalid_byte_value(#[case] invalid_byte: u8) {
+        let mut page = PageBuilder::new().with_block_size(50).with_buffer().build();
+
+        // Manually set an invalid byte value
+        page.byte_buffer[10] = invalid_byte;
+
+        let err = page.read_bool(10);
+        assert_eq!(err, Err(StormDbError::InvalidBool));
+    }
+
+    #[rstest]
+    fn test_bool_operations_at_different_offsets() -> Result<()> {
+        let mut page = PageBuilder::new().with_block_size(50).with_buffer().build();
+
+        // Test writing and reading bools at various offsets
+        page.write_bool(0, true)?;
+        page.write_bool(1, false)?;
+        page.write_bool(25, true)?;
+        page.write_bool(49, false)?; // Last valid index
+
+        assert_eq!(page.read_bool(0)?, true);
+        assert_eq!(page.read_bool(1)?, false);
+        assert_eq!(page.read_bool(25)?, true);
+        assert_eq!(page.read_bool(49)?, false);
+
+        Ok(())
+    }
+
+    #[rstest]
+    fn test_bool_overwrites_existing_value() -> Result<()> {
+        let mut page = PageBuilder::new().with_block_size(50).with_buffer().build();
+
+        // Write true, then overwrite with false
+        page.write_bool(10, true)?;
+        assert_eq!(page.read_bool(10)?, true);
+        assert_eq!(page.bytes()[10], 1u8);
+
+        page.write_bool(10, false)?;
+        assert_eq!(page.read_bool(10)?, false);
+        assert_eq!(page.bytes()[10], 0u8);
+
+        Ok(())
+    }
+
+    #[rstest]
+    #[case(100)]
+    #[case(20000)]
+    #[case(50000000000)]
+    #[case(123456890)]
+    #[case(887770066111444)]
+    fn test_write_varint(#[case] value: u64) -> Result<()> {
+        let mut buffer_my_fun = vec![0u8; 10];
+        let mut buffer_sqlite_fun = vec![0u8; 10];
+
+        let my_varint_size = write_varint(&mut buffer_my_fun, value);
+        let sqlite_varint_size = write_varint_sqlite(&mut buffer_sqlite_fun, value);
+
+        assert_eq!(buffer_my_fun, buffer_sqlite_fun);
+        assert_eq!(my_varint_size, sqlite_varint_size);
+        Ok(())
+    }
+
+    #[rstest]
+    #[case(100)]
+    #[case(20000)]
+    #[case(50000000000)]
+    #[case(123456890)]
+    #[case(887770066111444)]
+    fn test_read_varint(#[case] value: u64) -> Result<()> {
+        let mut buffer_sqlite_fun = vec![0u8; 10];
+        let sqlite_varint_size = write_varint_sqlite(&mut buffer_sqlite_fun, value);
+
+        let (varint_read, varint_size) = read_varint(&mut buffer_sqlite_fun)?;
+        assert_eq!(varint_read, value);
+        assert_eq!(varint_size, sqlite_varint_size);
+        Ok(())
     }
 }

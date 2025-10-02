@@ -15,6 +15,7 @@ The api as per the book will be:
 */
 
 // TODO: Add some error type and use that throughout the library. If I'm doing it, might as well do it right.
+// TODO: I think everything should be pub create and not just pub directly.
 
 mod block_metadata;
 mod error;
