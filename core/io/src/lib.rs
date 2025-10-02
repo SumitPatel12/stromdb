@@ -25,4 +25,4 @@ mod page;
 pub use block_metadata::BlockMetadata;
 pub use error::{Result, StormDbError};
 pub use file_manager::FileManager;
-pub use page::{Page, PageBuilder};
+pub use page::{Page, PageBuilder, write_varint, write_varint_sqlite};

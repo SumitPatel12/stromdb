@@ -277,7 +277,7 @@ pub fn write_varint(buffer: &mut [u8], value: u64) -> usize {
         buffer[8] = value as u8;
         value >>= 8;
 
-        for i in (1..8).rev() {
+        for i in (0..8).rev() {
             // Take the 7 least significant bits and set the 8th one to 1.
             buffer[i] = ((value & 0x7f) | 0x80) as u8;
             value >>= 7;
@@ -495,6 +495,7 @@ mod test {
     #[case(50000000000)]
     #[case(123456890)]
     #[case(887770066111444)]
+    #[case(768331757604415801)]
     fn test_write_varint(#[case] value: u64) -> Result<()> {
         let mut buffer_my_fun = vec![0u8; 10];
         let mut buffer_sqlite_fun = vec![0u8; 10];
