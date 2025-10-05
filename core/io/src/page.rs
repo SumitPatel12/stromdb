@@ -1,6 +1,7 @@
 // TODO: Write better doc comments for the functions.
 // P.S. I don't use any emoji renderer's in my editor. I just like using these slack type emote syntax (insert :bite_me_emote:).
 use crate::error::{Result, StormDbError};
+use crate::varint::{get_varint_len, read_varint, write_varint};
 
 // Should we have some more data here? Block size, max page size, metadata?
 // Yup, the block size is passed as a paramater to one of the constructor methods. I'd rather it be a part of the page itself.
@@ -22,10 +23,11 @@ impl Page {
     // I'll still keep this maybe I'll provide a data-type for i32 who knows.
     /// Reads and returns an `i32` from the given offset if present, None otherwise.
     /// ```
-    /// use file_manager::Page;
+    /// use file_manager::{Page, PageBuilder};
     ///
-    /// var page = PageBuilder::new().with_block_size(50).with_buffer().build();
-    /// var int_read = page::read_int(5)?;
+    /// let mut page = PageBuilder::new().with_block_size(50).with_buffer().build();
+    /// page.write_int(5, 100).unwrap();
+    /// let int_read = page.read_int(5).unwrap();
     /// ```
     pub fn read_int(&self, offset: usize) -> Result<i32> {
         if offset >= self.block_size {
@@ -53,10 +55,10 @@ impl Page {
 
     /// Puts the provided `i32` at the given offset.
     /// ```
-    /// use file_manager::Page;
+    /// use file_manager::PageBuilder;
     ///
-    /// var page = PageBuilder::new().with_block_size(50).with_buffer().build();
-    /// page::write_int(5, 50)?;
+    /// let mut page = PageBuilder::new().with_block_size(50).with_buffer().build();
+    /// page.write_int(5, 50).unwrap();
     /// ```
     pub fn write_int(&mut self, offset: usize, value: i32) -> Result<()> {
         if offset >= self.block_size {
@@ -75,10 +77,11 @@ impl Page {
 
     /// Reads bytes from the given offset.
     /// ```
-    /// use file_manager::Page;
+    /// use file_manager::PageBuilder;
     ///
-    /// var page = PageBuilder::new().with_block_size(50).with_buffer().build();
-    /// var bytes_read = page::read_bytes(5)?;
+    /// let mut page = PageBuilder::new().with_block_size(50).with_buffer().build();
+    /// page.write_bytes(5, vec![1, 2, 3]).unwrap();
+    /// let bytes_read = page.read_bytes(5).unwrap();
     /// ```
     pub fn read_bytes(&self, offset: usize) -> Result<Vec<u8>> {
         if offset >= self.block_size {
@@ -100,7 +103,7 @@ impl Page {
             .byte_buffer
             // TODO: This can likely be incorrect, for 32 bit systems usize is gonna be 32 while the varint can be 64.
             // We're gonna have to revisit this, possibley overflow pages will solve this. Page size is quite small compared to 32-bit max so I'm hoping that'd do the trick.
-            .get((offset + sz)..(offset + varint as usize))
+            .get((offset + sz)..(offset + sz + varint as usize))
         {
             Some(bytes) => Ok(bytes.into()),
             None => return Err(StormDbError::Corrupt("Invalid String.".to_string())),
@@ -109,10 +112,10 @@ impl Page {
 
     /// Writes the payload as the size of the payload as a `varint` followed by the actual payload at the given offset.
     /// ```
-    /// use file_manager::Page;
+    /// use file_manager::PageBuilder;
     ///
-    /// var page = PageBuilder::new().with_block_size(50).with_buffer().build();
-    /// page::write_bytes(5, vec![0u8, 1, 2, 3])?;
+    /// let mut page = PageBuilder::new().with_block_size(50).with_buffer().build();
+    /// page.write_bytes(5, vec![0u8, 1, 2, 3]).unwrap();
     /// ```
     pub fn write_bytes(&mut self, offset: usize, bytes: Vec<u8>) -> Result<()> {
         let bytes_len = bytes.len();
@@ -135,17 +138,18 @@ impl Page {
 
         // Write the lenght of the payload as a varint followed by the payload itself.
         write_varint(&mut self.byte_buffer[offset..], bytes_len as u64);
-        self.byte_buffer[offset + sz..offset + bytes_len].copy_from_slice(&bytes);
+        self.byte_buffer[offset + sz..offset + sz + bytes_len].copy_from_slice(&bytes);
 
         Ok(())
     }
 
     /// Read the string from the given offset. Returns a string if present, and an error otherwise.
     /// ```
-    /// use file_manager::Page;
+    /// use file_manager::PageBuilder;
     ///
-    /// var page = PageBuilder::new().with_block_size(50).with_buffer().build();
-    /// var string_read = page::read_string(5)?;
+    /// let mut page = PageBuilder::new().with_block_size(50).with_buffer().build();
+    /// page.write_string(5, "hello".to_string()).unwrap();
+    /// let string_read = page.read_string(5).unwrap();
     /// ```
     pub fn read_string(&self, offset: usize) -> Result<String> {
         let string_bytes = self.read_bytes(offset)?;
@@ -154,10 +158,10 @@ impl Page {
 
     /// Write the string to the given offset.
     /// ```
-    /// use file_manager::Page;
+    /// use file_manager::PageBuilder;
     ///
-    /// var page = PageBuilder::new().with_block_size(50).with_buffer().build();
-    /// page::write_string(5, "value".to_string())?;
+    /// let mut page = PageBuilder::new().with_block_size(50).with_buffer().build();
+    /// page.write_string(5, "value".to_string()).unwrap();
     /// ```
     pub fn write_string(&mut self, offset: usize, value: String) -> Result<()> {
         let string_bytes = value.into_bytes();
@@ -168,10 +172,11 @@ impl Page {
     // Booleans are gonna be 1 byte internally, maybe down the line bit packing might be something I look into.
     /// Reads a boolean value from the given offset.
     /// ```
-    /// use file_manager::Page;
+    /// use file_manager::PageBuilder;
     ///
-    /// var page = PageBuilder::new().with_block_size(50).with_buffer().build();
-    /// var bool = page::read_bool(5)?;
+    /// let mut page = PageBuilder::new().with_block_size(50).with_buffer().build();
+    /// page.write_bool(5, true).unwrap();
+    /// let value = page.read_bool(5).unwrap();
     /// ```
     pub fn read_bool(&self, offset: usize) -> Result<bool> {
         if offset >= self.block_size {
@@ -187,10 +192,10 @@ impl Page {
 
     /// Writes a boolean value to the given offset.
     /// ```
-    /// use file_manager::Page;
+    /// use file_manager::PageBuilder;
     ///
-    /// var page = PageBuilder::new().with_block_size(50).with_buffer().build();
-    /// page::write_bool(5)?;
+    /// let mut page = PageBuilder::new().with_block_size(50).with_buffer().build();
+    /// page.write_bool(5, true).unwrap();
     /// ```
     pub fn write_bool(&mut self, offset: usize, value: bool) -> Result<()> {
         if offset >= self.block_size {
@@ -203,10 +208,10 @@ impl Page {
 
     /// Returns an immutable reference to the byte_buffer of the Page.
     /// ```
-    /// use file_manager::Page;
+    /// use file_manager::PageBuilder;
     ///
-    /// var page = PageBuilder::new().with_block_size(50).with_buffer().build();
-    /// var page_bytes = page::bytes(5);
+    /// let page = PageBuilder::new().with_block_size(50).with_buffer().build();
+    /// let page_bytes = page.bytes();
     /// ```
     pub fn bytes(&self) -> &[u8] {
         &self.byte_buffer
@@ -216,7 +221,8 @@ impl Page {
     /// ```
     /// use file_manager::Page;
     ///
-    /// var string_size_on_page = Page::max_len("Some String".to_string());
+    /// let string_size_on_page = Page::max_len("Some String");
+    /// assert!(string_size_on_page > 0);
     /// ```
     pub fn max_len(string: &str) -> usize {
         let string_bytes = string.as_bytes();
@@ -290,201 +296,6 @@ impl PageBuilder {
     }
 }
 
-// I decided to give claude-code a try. It wrote some good doc comments.
-// What I implemented: https://github.com/SumitPatel12/sand/blob/c93298270a7bc5199cc83997dccfba992d5756f5/src/page/file_structures.rs#L432
-// Then I decided to check turso for their implementation and look over what could be improved. This one is from truso.
-/// Reads a variable-length integer (varint) from a byte buffer.
-///
-/// This function decodes a big-endian varint starting from the first byte of the provided buffer.
-/// Varints are encoded using a continuation bit scheme where the most significant bit (MSB) of each
-/// byte indicates whether more bytes follow. A varint can be between 1 and 9 bytes long.
-///
-/// # Arguments
-/// * `buffer` - A byte slice containing the varint to decode
-///
-/// # Returns
-/// Returns a tuple containing:
-/// * The decoded `u64` value
-/// * The number of bytes consumed (between 1 and 9)
-///
-/// # Errors
-/// Returns `StormDbError::Corrupt` if the buffer contains an invalid varint (e.g., insufficient bytes).
-///
-/// # Use
-/// ```
-/// use stormdb_io::{read_varint, write_varint};
-///
-/// // Read the varint back
-/// let (value, varint_size) = read_varint(&buffer).unwrap();
-/// ```
-pub fn read_varint(buffer: &[u8]) -> Result<(u64, usize)> {
-    let mut varint: u64 = 0;
-
-    // The max size of the varint is 9 bytes, and the last byte would be taken as a whole value.
-    // Thus we iterate over the firt 8 bytes via for and the last one if present is handled separately.
-    for i in 0..8 {
-        match buffer.get(i) {
-            Some(next_byte) => {
-                // Since we reached here we've got a value so shift the original one by 7 and add the next byte after clearing the MSB (most significant bit).
-                varint = (varint << 7) + (next_byte & 0x7f) as u64;
-
-                // I initially did next_byte < 0x80. Seemed logically correct. Don't know if using a bitwise and leads to any performance benefits.
-                // Tried it in c and the assembly has a cmp for less than version while the bitwise operation did not. Maybe that is the reason.
-                if (next_byte & 0x80) == 0 {
-                    return Ok((varint, i + 1));
-                }
-            }
-            None => return Err(StormDbError::Corrupt("Invalid Varint.".to_string())),
-        }
-    }
-
-    if let Some(last_byte) = buffer.get(8) {
-        varint = (varint << 8) + (*last_byte as u64);
-        Ok((varint, 9))
-    } else {
-        return Err(StormDbError::Corrupt("Invalid Varint.".to_string()));
-    }
-}
-
-/// Writes a variable-length integer (varint) to a byte buffer.
-///
-/// This function encodes a `u64` value as a big-endian varint and writes it to the provided buffer.
-/// Varints use a continuation bit scheme where the most significant bit (MSB) of each byte indicates
-/// whether more bytes follow. The encoding is space-efficient: smaller values use fewer bytes.
-///
-/// # Arguments
-/// * `buffer` - A mutable byte slice to write the varint to (must have at least 9 bytes available)
-/// * `value` - The `u64` value to encode
-///
-/// # Returns
-/// The number of bytes written (between 1 and 9).
-///
-/// # Varint Size
-/// * Values 0-127: 1 byte
-/// * Values 128-16,383: 2 bytes
-/// * Values up to 2^63-1: up to 9 bytes
-///
-/// # Use
-/// ```
-/// use stormdb_io::write_varint;
-///
-/// // Small value uses 1 byte
-/// let mut buffer = vec![0u8; 10];
-/// let size = write_varint(&mut buffer, 100);
-///
-/// // Larger value uses more bytes this one uses 3.
-/// let mut buffer = vec![0u8; 10];
-/// let size = write_varint(&mut buffer, 50000);
-/// ```
-pub fn write_varint(buffer: &mut [u8], value: u64) -> usize {
-    if value <= 0x7f {
-        buffer[0] = (value & 0x7f) as u8;
-        return 1;
-    }
-
-    let mut value = value;
-
-    // If any of the bits from 63-56 are set we know for sure it's going to be 9 bytes varint.
-    if (value & ((0xff000000_u64) << 32)) > 0 {
-        // Big endian so we start assigning from 9th bit towards the 1st one.
-        buffer[8] = value as u8;
-        value >>= 8;
-
-        for i in (0..8).rev() {
-            // Take the 7 least significant bits and set the 8th one to 1.
-            buffer[i] = ((value & 0x7f) | 0x80) as u8;
-            value >>= 7;
-        }
-
-        return 9;
-    }
-
-    // Since max size is 9 initializing by that amount.
-    let mut encoded_varint = [0u8; 9];
-    let mut current_varint_size = 0;
-
-    // As long as the value is still non-zero we will keep taking 7 bytes off of the value and assigning them to the encoded_varint array.
-    while value > 0 {
-        // Take the 7 least significant bits and set the 8th one to 1.
-        let byte = (value & 0x7f) | 0x80;
-        encoded_varint[current_varint_size] = byte as u8;
-
-        value >>= 7;
-        current_varint_size += 1;
-    }
-
-    // The while loop above always sets the MSB(most significant bit) to 1, but it shouldn't be so for the last byte.
-    // So we're setting it back to 0.
-    encoded_varint[0] &= 0x7f;
-    // Now since we are going BE (big endian), we'll have to assign the encoded varint to the buffer in reverse order.
-    for i in 0..current_varint_size {
-        buffer[i] = encoded_varint[current_varint_size - i - 1];
-    }
-
-    current_varint_size
-}
-
-/// SQLites implementation of the varint. Here only for testing purposes.
-pub fn write_varint_sqlite(buf: &mut [u8], value: u64) -> usize {
-    if value <= 0x7f {
-        buf[0] = (value & 0x7f) as u8;
-        return 1;
-    }
-
-    if value <= 0x3fff {
-        buf[0] = (((value >> 7) & 0x7f) | 0x80) as u8;
-        buf[1] = (value & 0x7f) as u8;
-        return 2;
-    }
-
-    let mut value = value;
-    if (value & ((0xff000000_u64) << 32)) > 0 {
-        buf[8] = value as u8;
-        value >>= 8;
-        for i in (0..8).rev() {
-            buf[i] = ((value & 0x7f) | 0x80) as u8;
-            value >>= 7;
-        }
-        return 9;
-    }
-
-    let mut encoded: [u8; 10] = [0; 10];
-    let mut bytes = value;
-    let mut n = 0;
-    while bytes != 0 {
-        let v = 0x80 | (bytes & 0x7f);
-        encoded[n] = v as u8;
-        bytes >>= 7;
-        n += 1;
-    }
-    encoded[0] &= 0x7f;
-    for i in 0..n {
-        buf[i] = encoded[n - 1 - i];
-    }
-    n
-}
-
-// Prolly not going to use it, implemented as an exercies. :shrug:
-/// Calculates the varint size for the given value.
-pub fn get_varint_len(value: u64) -> usize {
-    if value <= 0x7f {
-        return 1;
-    }
-
-    if (value & ((0xff000000_u64) << 32)) > 0 {
-        return 9;
-    }
-
-    let mut value = value;
-    let mut n = 0;
-    while value != 0 {
-        value >>= 7;
-        n += 1;
-    }
-    n
-}
-
-// TODO: Write Tests and also pass the function through a fuzzer just in case we need the encoded varint array to be of size 10, and the fuzzer finds something.
 #[cfg(test)]
 mod test {
     use rstest::rstest;
@@ -599,41 +410,6 @@ mod test {
         assert_eq!(page.read_bool(10)?, false);
         assert_eq!(page.bytes()[10], 0u8);
 
-        Ok(())
-    }
-
-    #[rstest]
-    #[case(100)]
-    #[case(20000)]
-    #[case(50000000000)]
-    #[case(123456890)]
-    #[case(887770066111444)]
-    #[case(768331757604415801)]
-    fn test_write_varint(#[case] value: u64) -> Result<()> {
-        let mut buffer_my_fun = vec![0u8; 10];
-        let mut buffer_sqlite_fun = vec![0u8; 10];
-
-        let my_varint_size = write_varint(&mut buffer_my_fun, value);
-        let sqlite_varint_size = write_varint_sqlite(&mut buffer_sqlite_fun, value);
-
-        assert_eq!(buffer_my_fun, buffer_sqlite_fun);
-        assert_eq!(my_varint_size, sqlite_varint_size);
-        Ok(())
-    }
-
-    #[rstest]
-    #[case(100)]
-    #[case(20000)]
-    #[case(50000000000)]
-    #[case(123456890)]
-    #[case(887770066111444)]
-    fn test_read_varint(#[case] value: u64) -> Result<()> {
-        let mut buffer_sqlite_fun = vec![0u8; 10];
-        let sqlite_varint_size = write_varint_sqlite(&mut buffer_sqlite_fun, value);
-
-        let (varint_read, varint_size) = read_varint(&mut buffer_sqlite_fun)?;
-        assert_eq!(varint_read, value);
-        assert_eq!(varint_size, sqlite_varint_size);
         Ok(())
     }
 }

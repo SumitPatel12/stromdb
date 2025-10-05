@@ -21,8 +21,10 @@ mod block_metadata;
 mod error;
 mod file_manager;
 mod page;
+mod varint;
 
 pub use block_metadata::BlockMetadata;
 pub use error::{Result, StormDbError};
 pub use file_manager::FileManager;
-pub use page::{Page, PageBuilder, read_varint, write_varint, write_varint_sqlite};
+pub use page::{Page, PageBuilder};
+pub use varint::{get_varint_len, read_varint, write_varint, write_varint_sqlite};
