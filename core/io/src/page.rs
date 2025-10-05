@@ -412,4 +412,150 @@ mod test {
 
         Ok(())
     }
+
+    #[rstest]
+    #[case(vec![1, 2, 3])]
+    #[case(vec![0, 255, 128, 64])]
+    #[case(vec![])]
+    fn test_write_and_read_bytes(#[case] input: Vec<u8>) -> Result<()> {
+        let mut page = PageBuilder::new()
+            .with_block_size(100)
+            .with_buffer()
+            .build();
+
+        page.write_bytes(5, input.clone())?;
+        let bytes_read = page.read_bytes(5)?;
+
+        assert_eq!(bytes_read, input);
+        Ok(())
+    }
+
+    #[rstest]
+    fn test_write_bytes_offset_out_of_bounds() {
+        let mut page = PageBuilder::new().with_block_size(50).with_buffer().build();
+        let err = page.write_bytes(55, vec![1, 2, 3]);
+
+        assert_eq!(err, Err(StormDbError::IndexOutOfBound(55, 49)));
+    }
+
+    #[rstest]
+    fn test_write_bytes_insufficient_space() {
+        let mut page = PageBuilder::new().with_block_size(10).with_buffer().build();
+        let err = page.write_bytes(5, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+
+        assert_eq!(err, Err(StormDbError::IndexOutOfBound(5, 9)));
+    }
+
+    #[rstest]
+    fn test_read_bytes_offset_out_of_bounds() {
+        let page = PageBuilder::new().with_block_size(50).with_buffer().build();
+        let err = page.read_bytes(55);
+
+        assert_eq!(err, Err(StormDbError::IndexOutOfBound(55, 49)));
+    }
+
+    #[rstest]
+    fn test_bytes_at_different_offsets() -> Result<()> {
+        let mut page = PageBuilder::new()
+            .with_block_size(100)
+            .with_buffer()
+            .build();
+
+        page.write_bytes(0, vec![1, 2, 3])?;
+        page.write_bytes(20, vec![4, 5, 6, 7])?;
+        page.write_bytes(50, vec![8])?;
+
+        assert_eq!(page.read_bytes(0)?, vec![1, 2, 3]);
+        assert_eq!(page.read_bytes(20)?, vec![4, 5, 6, 7]);
+        assert_eq!(page.read_bytes(50)?, vec![8]);
+
+        Ok(())
+    }
+
+    #[rstest]
+    #[case("hello")]
+    #[case("")]
+    #[case("rust")]
+    #[case("test with spaces and special chars !@#$")]
+    fn test_write_and_read_string(#[case] input: &str) -> Result<()> {
+        let mut page = PageBuilder::new()
+            .with_block_size(100)
+            .with_buffer()
+            .build();
+
+        page.write_string(5, input.to_string())?;
+        let string_read = page.read_string(5)?;
+
+        assert_eq!(string_read, input);
+        Ok(())
+    }
+
+    #[rstest]
+    fn test_write_string_offset_out_of_bounds() {
+        let mut page = PageBuilder::new().with_block_size(50).with_buffer().build();
+        let err = page.write_string(55, "hello".to_string());
+
+        assert_eq!(err, Err(StormDbError::IndexOutOfBound(55, 49)));
+    }
+
+    #[rstest]
+    fn test_write_string_insufficient_space() {
+        let mut page = PageBuilder::new().with_block_size(10).with_buffer().build();
+        let err = page.write_string(5, "this is a long string".to_string());
+
+        assert_eq!(err, Err(StormDbError::IndexOutOfBound(5, 9)));
+    }
+
+    #[rstest]
+    fn test_read_string_offset_out_of_bounds() {
+        let page = PageBuilder::new().with_block_size(50).with_buffer().build();
+        let err = page.read_string(55);
+
+        assert_eq!(err, Err(StormDbError::IndexOutOfBound(55, 49)));
+    }
+
+    #[rstest]
+    fn test_read_string_invalid_utf8() {
+        let mut page = PageBuilder::new().with_block_size(50).with_buffer().build();
+
+        // Write invalid UTF-8 bytes directly
+        let invalid_utf8 = vec![0xFF, 0xFE, 0xFD];
+        page.write_bytes(5, invalid_utf8).unwrap();
+
+        let err = page.read_string(5);
+        assert_eq!(err, Err(StormDbError::InvalidUtf8));
+    }
+
+    #[rstest]
+    fn test_string_at_different_offsets() -> Result<()> {
+        let mut page = PageBuilder::new()
+            .with_block_size(200)
+            .with_buffer()
+            .build();
+
+        page.write_string(0, "first".to_string())?;
+        page.write_string(30, "second".to_string())?;
+        page.write_string(60, "third".to_string())?;
+
+        assert_eq!(page.read_string(0)?, "first");
+        assert_eq!(page.read_string(30)?, "second");
+        assert_eq!(page.read_string(60)?, "third");
+
+        Ok(())
+    }
+
+    #[rstest]
+    fn test_unicode_string() -> Result<()> {
+        let mut page = PageBuilder::new()
+            .with_block_size(100)
+            .with_buffer()
+            .build();
+
+        let unicode_str = "Hello 世界 🌍";
+        page.write_string(5, unicode_str.to_string())?;
+        let string_read = page.read_string(5)?;
+
+        assert_eq!(string_read, unicode_str);
+        Ok(())
+    }
 }
