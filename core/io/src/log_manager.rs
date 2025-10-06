@@ -79,8 +79,8 @@ impl LogManager {
                     boundary = self.log_page.read_u32(0)?;
                 }
                 let record_position = boundary as usize - bytes_needed;
-                self.log_page.write_bytes(record_position, record);
-                self.log_page.write_u32(0, record_position as u32);
+                self.log_page.write_bytes(record_position, record)?;
+                self.log_page.write_u32(0, record_position as u32)?;
                 self.latest_lsn += 1;
                 Ok(self.latest_lsn)
             }
@@ -141,11 +141,11 @@ impl LogManagerBuilder {
 
     pub fn build(mut self) -> Result<LogManager> {
         let file_manager = self.file_manager.clone();
-        let file_len_in_blocks = file_manager.borrow_mut().length_in_blocks(&self.log_file);
+        let file_last_block_index = file_manager.borrow_mut().last_block_index(&self.log_file);
 
-        let block_metadata = match file_len_in_blocks {
-            Some(len_in_blocks) => {
-                let block_metadata = BlockMetadata::new(&self.log_file, len_in_blocks - 1);
+        let block_metadata = match file_last_block_index {
+            Some(last_block_index) => {
+                let block_metadata = BlockMetadata::new(&self.log_file, last_block_index);
                 self.file_manager
                     .borrow_mut()
                     .read(&block_metadata, &mut self.log_page)

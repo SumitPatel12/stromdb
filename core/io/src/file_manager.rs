@@ -140,7 +140,7 @@ impl FileManager {
     }
 
     /// Get length of file in blocks.
-    pub fn length_in_blocks(&self, file_name: &str) -> Option<usize> {
+    pub fn last_block_index(&self, file_name: &str) -> Option<usize> {
         let file = self.open_files.get(file_name);
         if let Some(file) = file {
             let file_length = file
