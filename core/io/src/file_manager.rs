@@ -90,7 +90,7 @@ impl FileManager {
     }
 
     /// Reads block into given page.
-    pub fn read(&mut self, block: BlockMetadata, page: &mut Page) -> Result<()> {
+    pub fn read(&mut self, block: &BlockMetadata, page: &mut Page) -> Result<()> {
         let mut file = self.get_file(&block.file_name())?;
         file.seek(std::io::SeekFrom::Start(
             (block.block_number() * page.block_size) as u64,
@@ -102,7 +102,7 @@ impl FileManager {
     }
 
     /// Writes block to the file.
-    pub fn write(&mut self, block: BlockMetadata, page: &mut Page) -> Result<()> {
+    pub fn write(&mut self, block: &BlockMetadata, page: &mut Page) -> Result<()> {
         let mut file = self.get_file(&block.file_name())?;
         file.seek(std::io::SeekFrom::Start(
             (block.block_number() * page.block_size) as u64,
@@ -112,8 +112,8 @@ impl FileManager {
         Ok(())
     }
 
-    /// Appends the block to the file.
-    pub fn append(&mut self, file_name: String) -> Result<BlockMetadata> {
+    /// Appends a new block the end of the file.
+    pub fn append(&mut self, file_name: &str) -> Result<BlockMetadata> {
         let mut file = self.get_file(&file_name)?;
         let file_metadata = file.metadata()?;
         let block_number = file_metadata.len() as usize / self.block_size;
@@ -123,6 +123,39 @@ impl FileManager {
         file.seek(std::io::SeekFrom::End(0))?;
         file.write(&bytes)?;
         Ok(block)
+    }
+
+    /// Returns the size of file in blocks, if the file exists, None otherwise.
+    pub fn length(&self, file_name: &str) -> Option<usize> {
+        let file = self.open_files.get(file_name);
+        if let Some(file) = file {
+            Some(
+                file.metadata()
+                    .expect("Error getting metadata for file.")
+                    .len() as usize,
+            )
+        } else {
+            None
+        }
+    }
+
+    /// Get length of file in blocks.
+    pub fn length_in_blocks(&self, file_name: &str) -> Option<usize> {
+        let file = self.open_files.get(file_name);
+        if let Some(file) = file {
+            let file_length = file
+                .metadata()
+                .expect("Error getting metadata for file.")
+                .len() as usize;
+
+            if file_length == 0 {
+                None
+            } else {
+                Some(file_length / self.block_size())
+            }
+        } else {
+            None
+        }
     }
 }
 

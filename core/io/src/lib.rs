@@ -20,6 +20,7 @@ The api as per the book will be:
 mod block_metadata;
 mod error;
 mod file_manager;
+mod log_manager;
 mod page;
 mod varint;
 

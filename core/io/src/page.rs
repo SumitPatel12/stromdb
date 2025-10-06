@@ -14,6 +14,7 @@ pub struct Page {
 impl Page {
     // This is prolly not the right thing to do. We'll see.
     const I32_SIZE: usize = std::mem::size_of::<i32>();
+    const U32_SIZE: usize = std::mem::size_of::<u32>();
 
     pub fn builder() -> PageBuilder {
         PageBuilder::new()
@@ -72,6 +73,54 @@ impl Page {
         }
 
         self.byte_buffer[offset..offset + Self::I32_SIZE].copy_from_slice(&value.to_be_bytes());
+        Ok(())
+    }
+
+    /// Reads and returns a `u32` from the given offset if present, None otherwise.
+    /// ```
+    /// use file_manager::{Page, PageBuilder};
+    ///
+    /// let mut page = PageBuilder::new().with_block_size(50).with_buffer().build();
+    /// page.write_u32(5, 100).unwrap();
+    /// let uint_read = page.read_u32(5).unwrap();
+    /// ```
+    pub fn read_u32(&self, offset: usize) -> Result<u32> {
+        if offset >= self.block_size {
+            return Err(StormDbError::IndexOutOfBound(offset, self.block_size - 1));
+        }
+
+        if offset + Self::U32_SIZE >= self.block_size {
+            return Err(StormDbError::OutOfBound(
+                "Reached end of file before reading the complete u32 value.".to_string(),
+            ));
+        }
+
+        Ok(u32::from_be_bytes(
+            self.byte_buffer[offset..offset + Self::U32_SIZE]
+                .try_into()
+                .unwrap(),
+        ))
+    }
+
+    /// Puts the provided `u32` at the given offset.
+    /// ```
+    /// use file_manager::PageBuilder;
+    ///
+    /// let mut page = PageBuilder::new().with_block_size(50).with_buffer().build();
+    /// page.write_u32(5, 50).unwrap();
+    /// ```
+    pub fn write_u32(&mut self, offset: usize, value: u32) -> Result<()> {
+        if offset >= self.block_size {
+            return Err(StormDbError::IndexOutOfBound(offset, self.block_size - 1));
+        }
+
+        if offset + Self::U32_SIZE >= self.block_size {
+            return Err(StormDbError::OutOfBound(
+                "Reached end of file before writing the complete u32 value.".to_string(),
+            ));
+        }
+
+        self.byte_buffer[offset..offset + Self::U32_SIZE].copy_from_slice(&value.to_be_bytes());
         Ok(())
     }
 
@@ -332,6 +381,41 @@ mod test {
             err,
             Err(StormDbError::OutOfBound(
                 "Reached end of file before writing the complete int value.".to_string()
+            ))
+        );
+    }
+
+    #[rstest]
+    #[case(55, vec![0x00, 0x00, 0x00, 0x37])]
+    #[case(0, vec![0x00, 0x00, 0x00, 0x00])]
+    #[case(u32::MAX, vec![0xff, 0xff, 0xff, 0xff])]
+    fn test_write_and_read_u32(#[case] input: u32, #[case] output: Vec<u8>) -> Result<()> {
+        let mut page = PageBuilder::new().with_block_size(50).with_buffer().build();
+
+        page.write_u32(5, input)?;
+        assert_eq!(page.bytes()[5..5 + Page::U32_SIZE].to_vec(), output);
+
+        assert_eq!(page.read_u32(5)?, input);
+        Ok(())
+    }
+
+    #[rstest]
+    fn test_write_u32_offset_out_of_bounds() {
+        let mut page = PageBuilder::new().with_block_size(50).with_buffer().build();
+        let err = page.write_u32(55, 55);
+
+        assert_eq!(err, Err(StormDbError::IndexOutOfBound(55, 49)));
+    }
+
+    #[rstest]
+    fn test_write_u32_offset_plus_size_out_of_bounds() {
+        let mut page = PageBuilder::new().with_block_size(50).with_buffer().build();
+        let err = page.write_u32(48, 55);
+
+        assert_eq!(
+            err,
+            Err(StormDbError::OutOfBound(
+                "Reached end of file before writing the complete u32 value.".to_string()
             ))
         );
     }

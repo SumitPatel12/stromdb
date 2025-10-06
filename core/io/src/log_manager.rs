@@ -1,0 +1,180 @@
+/*
+Log Manager API:
+  public LogMgr(FileMgr fm, String logfile);
+  public int append(byte[] rec);
+  public void flush(int lsn);
+  public Iterator<byte[]> iterator();
+ */
+
+use std::{cell::RefCell, rc::Rc};
+
+use crate::{BlockMetadata, FileManager, Page, PageBuilder, StormDbError, error::Result};
+
+pub struct LogIterator<'a> {
+    file_manager: Rc<RefCell<FileManager>>,
+    log_page: Page,
+    block_id: &'a BlockMetadata,
+    current_offset: u32,
+}
+
+impl<'a> LogIterator<'a> {
+    pub fn new(file_manager: Rc<RefCell<FileManager>>, block: &'a BlockMetadata) -> Self {
+        let mut file_manager_borrowed = file_manager.borrow_mut();
+        let bytes = vec![0; file_manager_borrowed.block_size()];
+        let mut page = Page::builder()
+            .with_block_size(file_manager_borrowed.block_size())
+            .with_log_buffer(bytes)
+            .build();
+
+        file_manager_borrowed
+            .read(block, &mut page)
+            .expect("Error reading block into page for iterator");
+        let boundary = page.read_u32(0).expect("Error reading boundary for page.");
+
+        drop(file_manager_borrowed);
+
+        Self {
+            file_manager,
+            log_page: page,
+            block_id: block,
+            current_offset: boundary,
+        }
+    }
+}
+
+pub struct LogManager {
+    log_file: String,
+    file_manager: Rc<RefCell<FileManager>>,
+    log_page: Page,
+    current_block: BlockMetadata,
+    // I think u32 should be more than enough for the lsn numbers for my purposes. We'll see if that needs to change down the line.
+    latest_lsn: u32,
+    latest_flushed_lsn: u32,
+}
+
+impl LogManager {
+    pub fn builder(log_file: String, file_manager: Rc<RefCell<FileManager>>) -> LogManagerBuilder {
+        LogManagerBuilder::new(log_file, file_manager)
+    }
+
+    /// Flushes the values in the log_page to the disk. Only does this if the latest flushed record is smaller than the latest written record.
+    pub fn flush(&mut self) {
+        if self.latest_lsn >= self.latest_flushed_lsn {
+            self.flush_to_file()
+        }
+    }
+
+    // Appends records from right to left. Boundary is where the latest record should start from. The first 4 bytes will always be a u32 representing the boundary.
+    // Block would look something like this:                                 boundary ..................(boundary points here)record1.
+    // After one more record insertino Block would look something like this: boundary2......(now boundary points here)record2 record1.
+    pub fn append(&mut self, record: Vec<u8>) -> Result<u32> {
+        let record_length = record.len();
+        let bytes_needed = size_of::<u32>() + record_length;
+
+        match self.log_page.read_u32(0) {
+            Ok(mut boundary) => {
+                if (boundary as usize - bytes_needed) < size_of::<u32>() {
+                    self.flush();
+                    self.current_block = self.append_new_block()?;
+                    boundary = self.log_page.read_u32(0)?;
+                }
+                let record_position = boundary as usize - bytes_needed;
+                self.log_page.write_bytes(record_position, record);
+                self.log_page.write_u32(0, record_position as u32);
+                self.latest_lsn += 1;
+                Ok(self.latest_lsn)
+            }
+            // TODO: Maybe have better error reporting.
+            Err(_) => {
+                return Err(StormDbError::Corrupt(
+                    "No Page Availabe for Log Records.".to_string(),
+                ));
+            }
+        }
+    }
+
+    pub fn iterator(&self) -> LogIterator {
+        LogIterator::new(self.file_manager.clone(), &self.current_block)
+    }
+
+    fn flush_to_file(&mut self) {
+        self.file_manager
+            .borrow_mut()
+            .write(&self.current_block, &mut self.log_page)
+            .expect("error writing to log file");
+        self.latest_flushed_lsn = self.latest_lsn;
+    }
+
+    /// Appends a new block to the end of the log_page.
+    fn append_new_block(&mut self) -> Result<BlockMetadata> {
+        let block_metadata = self.file_manager.borrow_mut().append(&self.log_file)?;
+        self.log_page
+            .write_u32(0, self.file_manager.borrow_mut().block_size() as u32)?;
+        self.file_manager
+            .borrow_mut()
+            .write(&block_metadata, &mut self.log_page)
+            .expect("could not write block id in to log file");
+
+        Ok(block_metadata)
+    }
+}
+
+// So I tried without a builder method first and it was atrocious to say the least. Code duplication. Needing a separate method for append_new_block that is not on self.
+// Having to clone the file_manager multiple times. Alas builder is a vice I must endulge in.
+pub struct LogManagerBuilder {
+    log_file: String,
+    file_manager: Rc<RefCell<FileManager>>,
+    log_page: Page,
+}
+
+impl LogManagerBuilder {
+    pub fn new(log_file: String, file_manager: Rc<RefCell<FileManager>>) -> Self {
+        let log_page = PageBuilder::new()
+            .with_log_buffer(vec![0; file_manager.borrow().block_size()])
+            .build();
+        Self {
+            log_file,
+            file_manager,
+            log_page,
+        }
+    }
+
+    pub fn build(mut self) -> Result<LogManager> {
+        let file_manager = self.file_manager.clone();
+        let file_len_in_blocks = file_manager.borrow_mut().length_in_blocks(&self.log_file);
+
+        let block_metadata = match file_len_in_blocks {
+            Some(len_in_blocks) => {
+                let block_metadata = BlockMetadata::new(&self.log_file, len_in_blocks - 1);
+                self.file_manager
+                    .borrow_mut()
+                    .read(&block_metadata, &mut self.log_page)
+                    .expect("could not read block id in to page");
+                block_metadata
+            }
+            None => self.append_new_block()?,
+        };
+
+        Ok(LogManager {
+            log_file: self.log_file,
+            file_manager: self.file_manager,
+            log_page: self.log_page,
+            current_block: block_metadata,
+            latest_lsn: 0,
+            latest_flushed_lsn: 0,
+        })
+    }
+
+    // Much cleaner than having a method with signature like LogManager::append_new_block(file_manager: Rc<RefCell<FileManager>>, log_file: &str, log_page: &mut Page).
+    fn append_new_block(&mut self) -> Result<BlockMetadata> {
+        let block_metadata = self.file_manager.borrow_mut().append(&self.log_file)?;
+        self.log_page
+            .write_u32(0, self.file_manager.borrow_mut().block_size() as u32)?;
+        self.file_manager
+            .borrow_mut()
+            .write(&block_metadata, &mut self.log_page)
+            .expect("could not write block id in to log file");
+
+        Ok(block_metadata)
+    }
+}

@@ -11,9 +11,9 @@ pub struct BlockMetadata {
 }
 
 impl BlockMetadata {
-    pub fn new(filename: String, block_number: usize) -> Self {
+    pub fn new(file_name: &str, block_number: usize) -> Self {
         BlockMetadata {
-            file_name: filename,
+            file_name: file_name.to_string(),
             block_number,
         }
     }
