@@ -12,19 +12,18 @@ use std::{
 };
 
 use crate::{
-    BlockMetadata, FileManager, Page, PageBuilder, StormDbError, block_metadata, error::Result,
-    get_varint_len,
+    BlockMetadata, FileManager, Page, PageBuilder, StormDbError, error::Result, get_varint_len,
 };
 
-pub struct LogIterator<'a> {
+pub struct LogIterator {
     file_manager: Rc<RefCell<FileManager>>,
     log_page: Page,
-    block_id: &'a BlockMetadata,
+    block_id: BlockMetadata,
     current_offset: u32,
 }
 
-impl<'a> LogIterator<'a> {
-    pub fn new(file_manager: Rc<RefCell<FileManager>>, block: &'a BlockMetadata) -> Self {
+impl LogIterator {
+    pub fn new(file_manager: Rc<RefCell<FileManager>>, block: &BlockMetadata) -> Self {
         let mut file_manager_borrowed = file_manager.borrow_mut();
         let bytes = vec![0; file_manager_borrowed.block_size()];
         let mut page = Page::builder()
@@ -37,7 +36,7 @@ impl<'a> LogIterator<'a> {
         Self {
             file_manager,
             log_page: page,
-            block_id: block,
+            block_id: block.clone(),
             current_offset: boundary,
         }
     }
@@ -53,6 +52,46 @@ impl<'a> LogIterator<'a> {
         log_page
             .read_u32(0)
             .expect("Error reading boundary from log page.")
+    }
+}
+
+impl Iterator for LogIterator {
+    type Item = Vec<u8>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // If the current block does not have any more records we'd have to check if there is a block before it.
+        if self.current_offset >= self.file_manager.borrow_mut().block_size() as u32 {
+            // If we're on the last block and we're out of records then we're done for good.
+            if self.block_id.block_number() == 0 {
+                return None;
+            } else {
+                // Otherwise load the previous block into the page. And ensure that the current_offset is also set correctly.
+                self.block_id = BlockMetadata::new(
+                    &self.block_id.file_name(),
+                    self.block_id.block_number() - 1,
+                );
+
+                Self::move_to_block(
+                    self.file_manager.borrow_mut(),
+                    &self.block_id,
+                    &mut self.log_page,
+                );
+
+                self.current_offset = self
+                    .log_page
+                    .read_u32(0)
+                    .expect("Error reading boundary for newly loaded block.");
+            }
+        }
+
+        let record_bytes = self
+            .log_page
+            .read_bytes(self.current_offset as usize)
+            .expect("Error reading record bytes for iterator");
+
+        self.current_offset +=
+            record_bytes.len() as u32 + get_varint_len(record_bytes.len() as u64) as u32;
+        Some(record_bytes)
     }
 }
 

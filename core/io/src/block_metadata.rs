@@ -4,7 +4,7 @@ use std::{fmt::Display, hash::Hash};
 /// Currently stores the following two things:
 ///  1. Name of the file containing the block.
 ///  2. Logical index/number of the block in the said file.
-#[derive(Eq, PartialEq, Hash)]
+#[derive(Eq, PartialEq, Hash, Clone)]
 pub struct BlockMetadata {
     file_name: String,
     block_number: usize,
