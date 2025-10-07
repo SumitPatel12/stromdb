@@ -6,9 +6,15 @@ Log Manager API:
   public Iterator<byte[]> iterator();
  */
 
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{RefCell, RefMut},
+    rc::Rc,
+};
 
-use crate::{BlockMetadata, FileManager, Page, PageBuilder, StormDbError, error::Result};
+use crate::{
+    BlockMetadata, FileManager, Page, PageBuilder, StormDbError, block_metadata, error::Result,
+    get_varint_len,
+};
 
 pub struct LogIterator<'a> {
     file_manager: Rc<RefCell<FileManager>>,
@@ -26,12 +32,7 @@ impl<'a> LogIterator<'a> {
             .with_log_buffer(bytes)
             .build();
 
-        file_manager_borrowed
-            .read(block, &mut page)
-            .expect("Error reading block into page for iterator");
-        let boundary = page.read_u32(0).expect("Error reading boundary for page.");
-
-        drop(file_manager_borrowed);
+        let boundary = Self::move_to_block(file_manager_borrowed, block, &mut page);
 
         Self {
             file_manager,
@@ -39,6 +40,19 @@ impl<'a> LogIterator<'a> {
             block_id: block,
             current_offset: boundary,
         }
+    }
+
+    fn move_to_block(
+        mut file_manager: RefMut<FileManager>,
+        block: &BlockMetadata,
+        log_page: &mut Page,
+    ) -> u32 {
+        file_manager
+            .read(block, log_page)
+            .expect("Error reading block to log page.");
+        log_page
+            .read_u32(0)
+            .expect("Error reading boundary from log page.")
     }
 }
 
@@ -69,7 +83,8 @@ impl LogManager {
     // After one more record insertino Block would look something like this: boundary2......(now boundary points here)record2 record1.
     pub fn append(&mut self, record: Vec<u8>) -> Result<u32> {
         let record_length = record.len();
-        let bytes_needed = size_of::<u32>() + record_length;
+        // Since bytes are added as varitn of the size followed by the actual bytes, we'd need the varint length for the page fit calculations
+        let bytes_needed = get_varint_len(record_length as u64) + record_length;
 
         match self.log_page.read_u32(0) {
             Ok(mut boundary) => {
@@ -79,6 +94,12 @@ impl LogManager {
                     boundary = self.log_page.read_u32(0)?;
                 }
                 let record_position = boundary as usize - bytes_needed;
+                // The question is how would I read it? The varint is stored at the start not the end, so how would the iterator go over it?
+                // Ok I read further and it seems like in the book, they just read the first record of the page and onwards.
+                // Doesn't really sit well with me. But there's no better way I can think of,
+                // other than appending the varint at the end, that also in reverse order so I can read it. :melting_face: :shrug:
+                // You know what I'm gonna try that, but then how would I have 9 bytes represented? Lol
+                // Also 9 bytes record size is likely never gonna happen.
                 self.log_page.write_bytes(record_position, record)?;
                 self.log_page.write_u32(0, record_position as u32)?;
                 self.latest_lsn += 1;

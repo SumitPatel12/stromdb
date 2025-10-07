@@ -139,7 +139,8 @@ impl Page {
 
         let (varint, sz) = read_varint(&self.byte_buffer[offset..])?;
 
-        if offset + Self::I32_SIZE >= self.block_size {
+        // If the bytes we're trying to read bytes size (varint) + varint size is greater than the block size then it's not a correct value
+        if offset as u64 + sz as u64 + varint >= self.block_size as u64 {
             return Err(StormDbError::OutOfBound(format!(
                 "Cannot read {} bytes from offset {}. Last index is {}",
                 sz,
@@ -170,13 +171,6 @@ impl Page {
         let bytes_len = bytes.len();
         if offset + bytes_len >= self.block_size {
             return Err(StormDbError::IndexOutOfBound(offset, self.block_size - 1));
-        }
-
-        // This shouldn't happen, hopefully.
-        if offset + Self::I32_SIZE >= self.block_size {
-            return Err(StormDbError::OutOfBound(
-                "Insufficient space to write given bytes".to_string(),
-            ));
         }
 
         let sz = get_varint_len(bytes_len as u64);
