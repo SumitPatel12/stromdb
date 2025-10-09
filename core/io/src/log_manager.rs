@@ -5,6 +5,7 @@ Log Manager API:
   public void flush(int lsn);
   public Iterator<byte[]> iterator();
  */
+#![allow(dead_code)]
 
 use std::{
     cell::{RefCell, RefMut},
@@ -25,7 +26,7 @@ pub struct LogIterator {
 // This one reads form the start of the last page and keeps going back.
 impl LogIterator {
     pub fn new(file_manager: Rc<RefCell<FileManager>>, block: &BlockMetadata) -> Self {
-        let mut file_manager_borrowed = file_manager.borrow_mut();
+        let file_manager_borrowed = file_manager.borrow_mut();
         let bytes = vec![0; file_manager_borrowed.block_size()];
         let mut page = Page::builder()
             .with_block_size(file_manager_borrowed.block_size())
@@ -53,6 +54,48 @@ impl LogIterator {
         log_page
             .read_u32(0)
             .expect("Error reading boundary from log page.")
+    }
+}
+
+impl Iterator for LogIterator2 {
+    type Item = Vec<u8>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // The boundary at offset 0 indicates where records start
+        // We read backwards from current_offset
+        // If current_offset <= boundary, we're at the start of this block
+        if self.current_offset <= self.log_page.read_u32(0).ok()? {
+            // If we're on the first block (block 0), we're done
+            if self.block_id.block_number() == 0 {
+                return None;
+            }
+
+            // Move to the previous block
+            self.block_id =
+                BlockMetadata::new(&self.block_id.file_name(), self.block_id.block_number() - 1);
+
+            Self::move_to_block(
+                self.file_manager.borrow_mut(),
+                &self.block_id,
+                &mut self.log_page,
+            );
+
+            // Set current_offset to the end of the block (block_size - 1)
+            self.current_offset = (self.file_manager.borrow().block_size() - 1) as u32;
+        }
+
+        // Read the record from the end backwards
+        let record_bytes = self
+            .log_page
+            .read_bytes_for_log_2(self.current_offset as usize)
+            .ok()?;
+
+        // Move the offset backwards by the size of the record + varint
+        let record_len = record_bytes.len();
+        let varint_size = crate::varint::get_varint_len(record_len as u64);
+        self.current_offset -= (record_len + varint_size) as u32;
+
+        Some(record_bytes)
     }
 }
 
@@ -106,7 +149,7 @@ pub struct LogIterator2 {
 // This one reads form the end of the last page and keeps going back.
 impl LogIterator2 {
     pub fn new(file_manager: Rc<RefCell<FileManager>>, block: &BlockMetadata) -> Self {
-        let mut file_manager_borrowed = file_manager.borrow_mut();
+        let file_manager_borrowed = file_manager.borrow_mut();
         let bytes = vec![0; file_manager_borrowed.block_size()];
         let mut page = Page::builder()
             .with_block_size(file_manager_borrowed.block_size())

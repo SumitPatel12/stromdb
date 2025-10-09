@@ -1,7 +1,10 @@
 // TODO: Write better doc comments for the functions.
 // P.S. I don't use any emoji renderer's in my editor. I just like using these slack type emote syntax (insert :bite_me_emote:).
 use crate::error::{Result, StormDbError};
-use crate::varint::{get_varint, get_varint_len, read_varint, write_varint};
+use crate::varint::{
+    get_varint, get_varint_len, get_varint_reversed, read_varint, read_varint_reversed,
+    write_varint,
+};
 
 // Should we have some more data here? Block size, max page size, metadata?
 // Yup, the block size is passed as a paramater to one of the constructor methods. I'd rather it be a part of the page itself.
@@ -192,17 +195,49 @@ impl Page {
             return Err(StormDbError::IndexOutOfBound(offset, self.block_size - 1));
         }
 
-        let (varint, sz) = get_varint(bytes_len as u64);
+        let (varint, sz) = get_varint_reversed(bytes_len as u64);
         // String won't fit onto the page so we reutrn an error.
         if offset + bytes_len + sz >= self.block_size {
             return Err(StormDbError::IndexOutOfBound(offset, self.block_size - 1));
         }
 
-        // Write the payload first, followed by varint. The varint is in reverse order.
+        // Write the payload first, followed by reversed varint.
         self.byte_buffer[offset..offset + bytes_len].copy_from_slice(&bytes);
-        self.byte_buffer[offset + bytes_len..offset + sz + bytes_len].copy_from_slice(&varint);
+        self.byte_buffer[offset + bytes_len..offset + sz + bytes_len]
+            .copy_from_slice(&varint[..sz]);
 
         Ok(())
+    }
+
+    /// Read bytes written by write_bytes_for_log_2. This reads from the end of the record backwards.
+    /// The end_offset should point to the last byte of the reversed varint.
+    pub fn read_bytes_for_log_2(&self, end_offset: usize) -> Result<Vec<u8>> {
+        if end_offset >= self.block_size {
+            return Err(StormDbError::IndexOutOfBound(
+                end_offset,
+                self.block_size - 1,
+            ));
+        }
+
+        // Read the reversed varint to get the length
+        let (bytes_len, varint_size) = read_varint_reversed(&self.byte_buffer, end_offset)?;
+
+        // Calculate the start of the payload
+        let payload_start = end_offset + 1 - varint_size - bytes_len as usize;
+        let payload_end = end_offset + 1 - varint_size;
+
+        if payload_start >= self.block_size {
+            return Err(StormDbError::IndexOutOfBound(
+                payload_start,
+                self.block_size - 1,
+            ));
+        }
+
+        // Read the payload
+        let mut result = vec![0u8; bytes_len as usize];
+        result.copy_from_slice(&self.byte_buffer[payload_start..payload_end]);
+
+        Ok(result)
     }
 
     /// Read the string from the given offset. Returns a string if present, and an error otherwise.
@@ -653,6 +688,75 @@ mod test {
         let string_read = page.read_string(5)?;
 
         assert_eq!(string_read, unicode_str);
+        Ok(())
+    }
+
+    #[rstest]
+    #[case(vec![1, 2, 3, 4, 5])]
+    #[case(vec![0xFF, 0xAA, 0x55])]
+    #[case(vec![42])]
+    fn test_write_and_read_bytes_for_log_2(#[case] test_bytes: Vec<u8>) -> Result<()> {
+        let mut page = PageBuilder::new()
+            .with_block_size(400)
+            .with_buffer()
+            .build();
+
+        // Write bytes at offset 10
+        let offset = 10;
+        page.write_bytes_for_log_2(offset, test_bytes.clone())?;
+
+        // Calculate the end offset (last byte of the reversed varint)
+        // end_offset = offset + bytes_len + varint_size - 1
+        let bytes_len = test_bytes.len();
+        let varint_size = get_varint_len(bytes_len as u64);
+        let end_offset = offset + bytes_len + varint_size - 1;
+
+        // Read back the bytes
+        let bytes_read = page.read_bytes_for_log_2(end_offset)?;
+
+        assert_eq!(bytes_read, test_bytes);
+        Ok(())
+    }
+
+    #[rstest]
+    fn test_read_bytes_for_log_2_offset_out_of_bounds() {
+        let page = PageBuilder::new().with_block_size(50).with_buffer().build();
+        let err = page.read_bytes_for_log_2(55);
+
+        assert_eq!(err, Err(StormDbError::IndexOutOfBound(55, 49)));
+    }
+
+    #[rstest]
+    fn test_write_bytes_for_log_2_multiple_records() -> Result<()> {
+        let mut page = PageBuilder::new()
+            .with_block_size(400)
+            .with_buffer()
+            .build();
+
+        // Write first record at offset 10
+        let first_bytes = vec![1, 2, 3, 4, 5];
+        let offset1 = 10;
+        page.write_bytes_for_log_2(offset1, first_bytes.clone())?;
+
+        let bytes_len1 = first_bytes.len();
+        let varint_size1 = get_varint_len(bytes_len1 as u64);
+        let end_offset1 = offset1 + bytes_len1 + varint_size1 - 1;
+
+        // Write second record immediately after the first
+        let second_bytes = vec![10, 20, 30];
+        let offset2 = offset1 + bytes_len1 + varint_size1;
+        page.write_bytes_for_log_2(offset2, second_bytes.clone())?;
+
+        let bytes_len2 = second_bytes.len();
+        let varint_size2 = get_varint_len(bytes_len2 as u64);
+        let end_offset2 = offset2 + bytes_len2 + varint_size2 - 1;
+
+        // Read both records back
+        let first_read = page.read_bytes_for_log_2(end_offset1)?;
+        let second_read = page.read_bytes_for_log_2(end_offset2)?;
+
+        assert_eq!(first_read, first_bytes);
+        assert_eq!(second_read, second_bytes);
         Ok(())
     }
 }
