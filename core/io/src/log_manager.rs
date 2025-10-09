@@ -22,6 +22,7 @@ pub struct LogIterator {
     current_offset: u32,
 }
 
+// This one reads form the start of the last page and keeps going back.
 impl LogIterator {
     pub fn new(file_manager: Rc<RefCell<FileManager>>, block: &BlockMetadata) -> Self {
         let mut file_manager_borrowed = file_manager.borrow_mut();
@@ -95,6 +96,47 @@ impl Iterator for LogIterator {
     }
 }
 
+pub struct LogIterator2 {
+    file_manager: Rc<RefCell<FileManager>>,
+    log_page: Page,
+    block_id: BlockMetadata,
+    current_offset: u32,
+}
+
+// This one reads form the end of the last page and keeps going back.
+impl LogIterator2 {
+    pub fn new(file_manager: Rc<RefCell<FileManager>>, block: &BlockMetadata) -> Self {
+        let mut file_manager_borrowed = file_manager.borrow_mut();
+        let bytes = vec![0; file_manager_borrowed.block_size()];
+        let mut page = Page::builder()
+            .with_block_size(file_manager_borrowed.block_size())
+            .with_log_buffer(bytes)
+            .build();
+
+        let boundary = Self::move_to_block(file_manager_borrowed, block, &mut page);
+
+        Self {
+            file_manager,
+            log_page: page,
+            block_id: block.clone(),
+            current_offset: boundary,
+        }
+    }
+
+    fn move_to_block(
+        mut file_manager: RefMut<FileManager>,
+        block: &BlockMetadata,
+        log_page: &mut Page,
+    ) -> u32 {
+        file_manager
+            .read(block, log_page)
+            .expect("Error reading block to log page.");
+        log_page
+            .read_u32(0)
+            .expect("Error reading boundary from log page.")
+    }
+}
+
 pub struct LogManager {
     log_file: String,
     file_manager: Rc<RefCell<FileManager>>,
@@ -140,6 +182,93 @@ impl LogManager {
                 // You know what I'm gonna try that, but then how would I have 9 bytes represented? Lol
                 // Also 9 bytes record size is likely never gonna happen.
                 self.log_page.write_bytes(record_position, record)?;
+                self.log_page.write_u32(0, record_position as u32)?;
+                self.latest_lsn += 1;
+                Ok(self.latest_lsn)
+            }
+            // TODO: Maybe have better error reporting.
+            Err(_) => {
+                return Err(StormDbError::Corrupt(
+                    "No Page Availabe for Log Records.".to_string(),
+                ));
+            }
+        }
+    }
+
+    pub fn iterator(&self) -> LogIterator {
+        LogIterator::new(self.file_manager.clone(), &self.current_block)
+    }
+
+    fn flush_to_file(&mut self) {
+        self.file_manager
+            .borrow_mut()
+            .write(&self.current_block, &mut self.log_page)
+            .expect("error writing to log file");
+        self.latest_flushed_lsn = self.latest_lsn;
+    }
+
+    /// Appends a new block to the end of the log_page.
+    fn append_new_block(&mut self) -> Result<BlockMetadata> {
+        let block_metadata = self.file_manager.borrow_mut().append(&self.log_file)?;
+        self.log_page
+            .write_u32(0, self.file_manager.borrow_mut().block_size() as u32)?;
+        self.file_manager
+            .borrow_mut()
+            .write(&block_metadata, &mut self.log_page)
+            .expect("could not write block id in to log file");
+
+        Ok(block_metadata)
+    }
+}
+
+// This one will write records in a bit of a differnt format. It will write the record data first then the varint in reverse order.
+// Will Likely not be the most performant one. I want to try writing this none the less.
+pub struct LogManager2 {
+    log_file: String,
+    file_manager: Rc<RefCell<FileManager>>,
+    log_page: Page,
+    current_block: BlockMetadata,
+    // I think u32 should be more than enough for the lsn numbers for my purposes. We'll see if that needs to change down the line.
+    latest_lsn: u32,
+    latest_flushed_lsn: u32,
+}
+
+impl LogManager2 {
+    pub fn builder(log_file: String, file_manager: Rc<RefCell<FileManager>>) -> LogManagerBuilder {
+        LogManagerBuilder::new(log_file, file_manager)
+    }
+
+    /// Flushes the values in the log_page to the disk. Only does this if the latest flushed record is smaller than the latest written record.
+    pub fn flush(&mut self) {
+        if self.latest_lsn >= self.latest_flushed_lsn {
+            self.flush_to_file()
+        }
+    }
+
+    // Appends records from right to left. Boundary is where the latest record should start from. The first 4 bytes will always be a u32 representing the boundary.
+    // Block would look something like this:                                 boundary ..................(boundary points here)record1.
+    // After one more record insertino Block would look something like this: boundary2......(now boundary points here)record2 record1.
+    pub fn append(&mut self, record: Vec<u8>) -> Result<u32> {
+        let record_length = record.len();
+        // Since bytes are added as varitn of the size followed by the actual bytes, we'd need the varint length for the page fit calculations
+        let bytes_needed = get_varint_len(record_length as u64) + record_length;
+
+        match self.log_page.read_u32(0) {
+            Ok(mut boundary) => {
+                if (boundary as usize - bytes_needed) < size_of::<u32>() {
+                    self.flush();
+                    self.current_block = self.append_new_block()?;
+                    boundary = self.log_page.read_u32(0)?;
+                }
+                let record_position = boundary as usize - bytes_needed;
+                // The question is how would I read it? The varint is stored at the start not the end, so how would the iterator go over it?
+                // Ok I read further and it seems like in the book, they just read the first record of the page and onwards.
+                // Doesn't really sit well with me. But there's no better way I can think of,
+                // other than appending the varint at the end, that also in reverse order so I can read it. :melting_face: :shrug:
+                // You know what I'm gonna try that, but then how would I have 9 bytes represented? Lol
+                // Also 9 bytes record size is likely never gonna happen.
+                self.log_page
+                    .write_bytes_for_log_2(record_position, record)?;
                 self.log_page.write_u32(0, record_position as u32)?;
                 self.latest_lsn += 1;
                 Ok(self.latest_lsn)

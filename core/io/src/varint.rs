@@ -209,6 +209,192 @@ pub fn get_varint_len(value: u64) -> usize {
     n
 }
 
+pub fn get_varint(value: u64) -> (Vec<u8>, usize) {
+    let mut buffer = vec![0u8, 9];
+    if value <= 0x7f {
+        buffer[0] = (value & 0x7f) as u8;
+        return (buffer, 1);
+    }
+
+    let mut value = value;
+
+    // If any of the bits from 63-56 are set we know for sure it's going to be 9 bytes varint.
+    if (value & ((0xff000000_u64) << 32)) > 0 {
+        // Big endian so we start assigning from 9th bit towards the 1st one.
+        buffer[8] = value as u8;
+        value >>= 8;
+
+        for i in (0..8).rev() {
+            // Take the 7 least significant bits and set the 8th one to 1.
+            buffer[i] = ((value & 0x7f) | 0x80) as u8;
+            value >>= 7;
+        }
+
+        return (buffer, 9);
+    }
+
+    // Since max size is 9 initializing by that amount.
+    let mut encoded_varint = [0u8; 9];
+    let mut current_varint_size = 0;
+
+    // As long as the value is still non-zero we will keep taking 7 bytes off of the value and assigning them to the encoded_varint array.
+    while value > 0 {
+        // Take the 7 least significant bits and set the 8th one to 1.
+        let byte = (value & 0x7f) | 0x80;
+        encoded_varint[current_varint_size] = byte as u8;
+
+        value >>= 7;
+        current_varint_size += 1;
+    }
+
+    // The while loop above always sets the MSB(most significant bit) to 1, but it shouldn't be so for the last byte.
+    // So we're setting it back to 0.
+    encoded_varint[0] &= 0x7f;
+    // Now since we are going BE (big endian), we'll have to assign the encoded varint to the buffer in reverse order.
+    for i in 0..current_varint_size {
+        buffer[i] = encoded_varint[current_varint_size - i - 1];
+    }
+
+    (buffer, current_varint_size)
+}
+
+/// Reads a reversed varint from a buffer, starting from an end offset and reading backwards.
+///
+/// In a reversed varint, the bits of each byte are reversed, and the continuation bit
+/// is at position 0 (LSB) instead of position 7 (MSB). This function reads backwards
+/// from the given end_offset until it finds a byte where bit 0 == 0, which marks the
+/// start of the reversed varint.
+///
+/// # Arguments
+///
+/// * `buffer` - The byte buffer containing the reversed varint
+/// * `end_offset` - The position of the last byte of the reversed varint (inclusive)
+///
+/// # Returns
+///
+/// Returns a tuple containing:
+/// * The decoded `u64` value
+/// * The number of bytes read (the size of the varint)
+///
+/// # Errors
+///
+/// Returns `StormDbError::IndexOutOfBound` if end_offset is out of bounds.
+/// Returns `StormDbError::Corrupt` if the varint is invalid.
+///
+/// # Example
+///
+/// ```
+/// use file_manager::varint::{get_varint_reversed, read_varint_reversed};
+///
+/// // Get a reversed varint for value 148
+/// let (reversed_varint, size) = get_varint_reversed(148);
+///
+/// // Create a buffer with padding and the reversed varint
+/// let mut buffer = vec![0xAA, 0xBB, 0xCC];
+/// buffer.extend_from_slice(&reversed_varint[..size]);
+///
+/// // Read it back from the end position
+/// let end_offset = buffer.len() - 1;
+/// let (value, bytes_read) = read_varint_reversed(&buffer, end_offset).unwrap();
+///
+/// assert_eq!(value, 148);
+/// assert_eq!(bytes_read, 2);
+/// ```
+pub fn read_varint_reversed(buffer: &[u8], end_offset: usize) -> Result<(u64, usize)> {
+    // Reading backwards from end_offset
+    // In reversed format, continuation bit is at bit 0 (LSB)
+    // We read backwards until we find a byte where bit 0 == 0
+
+    if end_offset >= buffer.len() {
+        return Err(StormDbError::IndexOutOfBound(end_offset, buffer.len() - 1));
+    }
+
+    let mut temp_buffer = Vec::with_capacity(9);
+    let mut bytes_read = 0;
+
+    // Read backwards from end_offset
+    for i in 0..9 {
+        if end_offset < i {
+            return Err(StormDbError::Corrupt(
+                "Invalid reversed varint.".to_string(),
+            ));
+        }
+
+        let pos = end_offset - i;
+        let byte = buffer[pos];
+        temp_buffer.push(byte);
+        bytes_read += 1;
+
+        // Check if this is the first byte of the varint (bit 0 == 0)
+        if (byte & 0x01) == 0 {
+            break;
+        }
+    }
+
+    // temp_buffer now has bytes in forward order (since we pushed while going backwards)
+    // Reverse bits in each byte to get normal varint
+    let normal_buffer: Vec<u8> = temp_buffer.iter().map(|b| b.reverse_bits()).collect();
+
+    // Read as normal varint
+    let (value, _) = read_varint(&normal_buffer)?;
+
+    Ok((value, bytes_read))
+}
+
+pub fn get_varint_reversed(value: u64) -> (Vec<u8>, usize) {
+    let mut buffer = vec![0u8, 9];
+    if value <= 0x7f {
+        buffer[0] = (value & 0x7f) as u8;
+        buffer[0] = buffer[0].reverse_bits();
+        return (buffer, 1);
+    }
+
+    let mut value = value;
+
+    // If any of the bits from 63-56 are set we know for sure it's going to be 9 bytes varint.
+    if (value & ((0xff000000_u64) << 32)) > 0 {
+        // Big endian so we start assigning from 9th bit towards the 1st one.
+        buffer[8] = value as u8;
+        value >>= 8;
+
+        for i in (0..8).rev() {
+            // Take the 7 least significant bits and set the 8th one to 1.
+            buffer[i] = ((value & 0x7f) | 0x80) as u8;
+            value >>= 7;
+        }
+
+        // Reverse bytes and bits
+        for i in 0..9 {
+            buffer[i] = buffer[i].reverse_bits();
+        }
+
+        return (buffer, 9);
+    }
+
+    // Since max size is 9 initializing by that amount.
+    let mut encoded_varint = [0u8; 9];
+    let mut current_varint_size = 0;
+
+    // As long as the value is still non-zero we will keep taking 7 bytes off of the value and assigning them to the encoded_varint array.
+    while value > 0 {
+        // Take the 7 least significant bits and set the 8th one to 1.
+        let byte = (value & 0x7f) | 0x80;
+        encoded_varint[current_varint_size] = byte as u8;
+
+        value >>= 7;
+        current_varint_size += 1;
+    }
+
+    // The while loop above always sets the MSB(most significant bit) to 1, but it shouldn't be so for the last byte.
+    // So we're setting it back to 0.
+    encoded_varint[0] &= 0x7f;
+    for i in 0..current_varint_size {
+        buffer[i] = encoded_varint[i].reverse_bits();
+    }
+
+    (buffer, current_varint_size)
+}
+
 #[cfg(test)]
 mod test {
     use rstest::rstest;
@@ -247,6 +433,61 @@ mod test {
         let (varint_read, varint_size) = read_varint(&mut buffer_sqlite_fun)?;
         assert_eq!(varint_read, value);
         assert_eq!(varint_size, sqlite_varint_size);
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_varint_reversed() -> Result<()> {
+        // Test with value 148 which encodes as: 10000001 00010100 (0x81 0x14)
+        let value = 148u64;
+
+        // Get the normal varint
+        let (normal_varint, normal_size) = get_varint(value);
+
+        // Verify normal encoding: should be [0x81, 0x14]
+        assert_eq!(normal_size, 2);
+        assert_eq!(normal_varint[0], 0x81); // 10000001
+        assert_eq!(normal_varint[1], 0x14); // 00010100
+
+        // Get the reversed varint
+        let (reversed_varint, reversed_size) = get_varint_reversed(value);
+
+        // Verify reversed encoding: should be [0x28, 0x81]
+        // 0x14 (00010100) reversed -> 0x28 (00101000)
+        // 0x81 (10000001) reversed -> 0x81 (10000001) - symmetrical
+        assert_eq!(reversed_size, 2);
+        assert_eq!(reversed_varint[0], 0x28); // 00101000
+        assert_eq!(reversed_varint[1], 0x81); // 10000001
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_read_varint_reversed() -> Result<()> {
+        // Test with value 148
+        let value = 148u64;
+
+        // Get the reversed varint
+        let (reversed_varint, reversed_size) = get_varint_reversed(value);
+
+        // Create a buffer with padding before and after
+        let mut buffer = vec![0xAA, 0xBB, 0xCC]; // Padding before
+        buffer.extend_from_slice(&reversed_varint[..reversed_size]);
+        buffer.extend_from_slice(&[0xDD, 0xEE, 0xFF]); // Padding after
+
+        // The end_offset should point to the last byte of the reversed varint
+        // Buffer: [0xAA, 0xBB, 0xCC, 0x28, 0x81, 0xDD, 0xEE, 0xFF]
+        // Indices: [  0,    1,    2,    3,    4,    5,    6,    7]
+        // Reversed varint is at indices 3-4, so end_offset = 4
+        let end_offset = 3 + reversed_size - 1;
+
+        // Read the reversed varint
+        let (read_value, read_size) = read_varint_reversed(&buffer, end_offset)?;
+
+        // Verify we got the original value back
+        assert_eq!(read_value, value);
+        assert_eq!(read_size, reversed_size);
+
         Ok(())
     }
 }

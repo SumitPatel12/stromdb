@@ -1,7 +1,7 @@
 // TODO: Write better doc comments for the functions.
 // P.S. I don't use any emoji renderer's in my editor. I just like using these slack type emote syntax (insert :bite_me_emote:).
 use crate::error::{Result, StormDbError};
-use crate::varint::{get_varint_len, read_varint, write_varint};
+use crate::varint::{get_varint, get_varint_len, read_varint, write_varint};
 
 // Should we have some more data here? Block size, max page size, metadata?
 // Yup, the block size is passed as a paramater to one of the constructor methods. I'd rather it be a part of the page itself.
@@ -182,6 +182,25 @@ impl Page {
         // Write the lenght of the payload as a varint followed by the payload itself.
         write_varint(&mut self.byte_buffer[offset..], bytes_len as u64);
         self.byte_buffer[offset + sz..offset + sz + bytes_len].copy_from_slice(&bytes);
+
+        Ok(())
+    }
+
+    pub fn write_bytes_for_log_2(&mut self, offset: usize, bytes: Vec<u8>) -> Result<()> {
+        let bytes_len = bytes.len();
+        if offset + bytes_len >= self.block_size {
+            return Err(StormDbError::IndexOutOfBound(offset, self.block_size - 1));
+        }
+
+        let (varint, sz) = get_varint(bytes_len as u64);
+        // String won't fit onto the page so we reutrn an error.
+        if offset + bytes_len + sz >= self.block_size {
+            return Err(StormDbError::IndexOutOfBound(offset, self.block_size - 1));
+        }
+
+        // Write the payload first, followed by varint. The varint is in reverse order.
+        self.byte_buffer[offset..offset + bytes_len].copy_from_slice(&bytes);
+        self.byte_buffer[offset + bytes_len..offset + sz + bytes_len].copy_from_slice(&varint);
 
         Ok(())
     }
