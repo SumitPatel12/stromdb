@@ -410,3 +410,116 @@ impl LogManagerBuilder {
         Ok(block_metadata)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::rc::Rc;
+    use tempdir::TempDir;
+    const BLOCK_SIZE: usize = 256;
+
+    #[test]
+    fn test_log_manger_builder() {
+        let tmp_dir = TempDir::new("test_log_manager").expect("failed to create temp dir");
+        let file_manager = Rc::new(RefCell::new(
+            FileManager::new(tmp_dir.path().to_owned(), BLOCK_SIZE)
+                .expect("failed to create file manager"),
+        ));
+        let log_manager = LogManager::builder("log.wal".to_string(), file_manager)
+            .build()
+            .expect("failed to build log manager");
+        assert_eq!(log_manager.current_block.block_number(), 0);
+        assert_eq!(log_manager.latest_lsn, 0);
+        assert_eq!(log_manager.latest_flushed_lsn, 0);
+        assert_eq!(
+            log_manager
+                .log_page
+                .read_u32(0)
+                .expect("failed to read boundary"),
+            BLOCK_SIZE as u32
+        );
+        tmp_dir.close().expect("failed to remove temp dir");
+    }
+
+    #[test]
+    fn test_log_manger_append() {
+        let tmp_dir = TempDir::new("test_log_manager").expect("failed to create temp dir");
+        let file_manager = Rc::new(RefCell::new(
+            FileManager::new(tmp_dir.path().to_owned(), BLOCK_SIZE)
+                .expect("failed to create file manager"),
+        ));
+        let mut log_manager = LogManager::builder("log.wal".to_string(), file_manager)
+            .build()
+            .expect("failed to build log manager");
+
+        assert_eq!(log_manager.current_block.block_number(), 0);
+        assert_eq!(log_manager.latest_lsn, 0);
+        assert_eq!(log_manager.latest_flushed_lsn, 0);
+        assert_eq!(
+            log_manager
+                .log_page
+                .read_u32(0)
+                .expect("failed to read boundary"),
+            BLOCK_SIZE as u32
+        );
+
+        log_manager
+            .append("Something".as_bytes().to_vec())
+            .expect("failed to append");
+        assert_eq!(log_manager.latest_lsn, 1);
+
+        log_manager
+            .append("to".as_bytes().to_vec())
+            .expect("failed to append");
+        assert_eq!(log_manager.latest_lsn, 2);
+
+        log_manager
+            .append("reflect".as_bytes().to_vec())
+            .expect("failed to append");
+        assert_eq!(log_manager.latest_lsn, 3);
+
+        log_manager
+            .append("upon".as_bytes().to_vec())
+            .expect("failed to append");
+        assert_eq!(log_manager.latest_lsn, 4);
+        tmp_dir.close().expect("failed to remove temp dir");
+    }
+
+    #[test]
+    fn test_log_iterator() {
+        let tmp_dir = TempDir::new("test_log_manager").expect("failed to create temp dir");
+        let file_manager = Rc::new(RefCell::new(
+            FileManager::new(tmp_dir.path().to_owned(), BLOCK_SIZE)
+                .expect("failed to create file manager"),
+        ));
+
+        let log_manager = Rc::new(RefCell::new(
+            LogManager::builder("log.wal".to_string(), file_manager.clone())
+                .build()
+                .expect("failed to build log manager"),
+        ));
+
+        let initial_block_id = {
+            let mut lm = log_manager.borrow_mut();
+            lm.append("Something".as_bytes().to_vec())
+                .expect("failed to append");
+            lm.append("to".as_bytes().to_vec())
+                .expect("failed to append");
+            lm.flush();
+            // First block ID
+            BlockMetadata::new(&lm.log_file, 0)
+        };
+
+        let mut log_iterator = LogIterator::new(file_manager.clone(), &initial_block_id);
+        let first = log_iterator.next();
+        assert!(first.is_some());
+        assert_eq!(first.unwrap(), vec![116, 111]); // "to"
+
+        let second = log_iterator.next();
+        assert!(second.is_some());
+        assert_eq!(second.unwrap(), "Something".as_bytes().to_vec());
+        assert_eq!(log_iterator.next(), None);
+
+        tmp_dir.close().expect("failed to remove temp dir");
+    }
+}

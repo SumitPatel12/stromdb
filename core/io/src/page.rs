@@ -2,8 +2,7 @@
 // P.S. I don't use any emoji renderer's in my editor. I just like using these slack type emote syntax (insert :bite_me_emote:).
 use crate::error::{Result, StormDbError};
 use crate::varint::{
-    get_varint, get_varint_len, get_varint_reversed, read_varint, read_varint_reversed,
-    write_varint,
+    get_varint_len, get_varint_reversed, read_varint, read_varint_reversed, write_varint,
 };
 
 // Should we have some more data here? Block size, max page size, metadata?
@@ -41,7 +40,7 @@ impl Page {
         // Initially used 4 directly, but since the language gives us a method I thought of using that. Maybe decreasing a function call would yield better performance?
         // Don't ask me how much time went into finding the syntax of std::mem::size_of::<i32>()
         // AI sometimes does give good suggestions.
-        if offset + Self::I32_SIZE >= self.block_size {
+        if offset + Self::I32_SIZE > self.block_size {
             return Err(StormDbError::OutOfBound(
                 "Reached end of file before reading the complete int value.".to_string(),
             ));
@@ -69,7 +68,7 @@ impl Page {
             return Err(StormDbError::IndexOutOfBound(offset, self.block_size - 1));
         }
 
-        if offset + Self::I32_SIZE >= self.block_size {
+        if offset + Self::I32_SIZE > self.block_size {
             return Err(StormDbError::OutOfBound(
                 "Reached end of file before writing the complete int value.".to_string(),
             ));
@@ -92,7 +91,7 @@ impl Page {
             return Err(StormDbError::IndexOutOfBound(offset, self.block_size - 1));
         }
 
-        if offset + Self::U32_SIZE >= self.block_size {
+        if offset + Self::U32_SIZE > self.block_size {
             return Err(StormDbError::OutOfBound(
                 "Reached end of file before reading the complete u32 value.".to_string(),
             ));
@@ -117,7 +116,7 @@ impl Page {
             return Err(StormDbError::IndexOutOfBound(offset, self.block_size - 1));
         }
 
-        if offset + Self::U32_SIZE >= self.block_size {
+        if offset + Self::U32_SIZE > self.block_size {
             return Err(StormDbError::OutOfBound(
                 "Reached end of file before writing the complete u32 value.".to_string(),
             ));
@@ -143,7 +142,7 @@ impl Page {
         let (varint, sz) = read_varint(&self.byte_buffer[offset..])?;
 
         // If the bytes we're trying to read bytes size (varint) + varint size is greater than the block size then it's not a correct value
-        if offset as u64 + sz as u64 + varint >= self.block_size as u64 {
+        if offset as u64 + sz as u64 + varint > self.block_size as u64 {
             return Err(StormDbError::OutOfBound(format!(
                 "Cannot read {} bytes from offset {}. Last index is {}",
                 sz,
@@ -172,13 +171,13 @@ impl Page {
     /// ```
     pub fn write_bytes(&mut self, offset: usize, bytes: Vec<u8>) -> Result<()> {
         let bytes_len = bytes.len();
-        if offset + bytes_len >= self.block_size {
+        if offset + bytes_len > self.block_size {
             return Err(StormDbError::IndexOutOfBound(offset, self.block_size - 1));
         }
 
         let sz = get_varint_len(bytes_len as u64);
         // String won't fit onto the page so we reutrn an error.
-        if offset + bytes_len + sz >= self.block_size {
+        if offset + bytes_len + sz > self.block_size {
             return Err(StormDbError::IndexOutOfBound(offset, self.block_size - 1));
         }
 
@@ -191,13 +190,13 @@ impl Page {
 
     pub fn write_bytes_for_log_2(&mut self, offset: usize, bytes: Vec<u8>) -> Result<()> {
         let bytes_len = bytes.len();
-        if offset + bytes_len >= self.block_size {
+        if offset + bytes_len > self.block_size {
             return Err(StormDbError::IndexOutOfBound(offset, self.block_size - 1));
         }
 
         let (varint, sz) = get_varint_reversed(bytes_len as u64);
         // String won't fit onto the page so we reutrn an error.
-        if offset + bytes_len + sz >= self.block_size {
+        if offset + bytes_len + sz > self.block_size {
             return Err(StormDbError::IndexOutOfBound(offset, self.block_size - 1));
         }
 
@@ -758,5 +757,172 @@ mod test {
         assert_eq!(first_read, first_bytes);
         assert_eq!(second_read, second_bytes);
         Ok(())
+    }
+
+    // Boundary condition tests - testing exact fits at block boundaries
+
+    #[rstest]
+    fn test_write_int_at_exact_boundary() -> Result<()> {
+        // Block size 8: indices 0-7
+        // Writing i32 (4 bytes) at offset 4 should succeed (writes to indices 4,5,6,7)
+        let mut page = PageBuilder::new().with_block_size(8).with_buffer().build();
+
+        page.write_int(4, 42)?;
+        assert_eq!(page.read_int(4)?, 42);
+        Ok(())
+    }
+
+    #[rstest]
+    fn test_write_int_past_boundary_fails() {
+        // Block size 8: indices 0-7
+        // Writing i32 (4 bytes) at offset 5 should fail (would write to indices 5,6,7,8)
+        let mut page = PageBuilder::new().with_block_size(8).with_buffer().build();
+
+        let err = page.write_int(5, 42);
+        assert!(err.is_err());
+    }
+
+    #[rstest]
+    fn test_read_int_at_exact_boundary() -> Result<()> {
+        // Block size 10: indices 0-9
+        // Reading i32 (4 bytes) at offset 6 should succeed (reads from indices 6,7,8,9)
+        let mut page = PageBuilder::new().with_block_size(10).with_buffer().build();
+
+        page.write_int(6, 100)?;
+        assert_eq!(page.read_int(6)?, 100);
+        Ok(())
+    }
+
+    #[rstest]
+    fn test_read_int_past_boundary_fails() {
+        // Block size 10: indices 0-9
+        // Reading i32 (4 bytes) at offset 7 should fail (would read from indices 7,8,9,10)
+        let page = PageBuilder::new().with_block_size(10).with_buffer().build();
+
+        let err = page.read_int(7);
+        assert!(err.is_err());
+    }
+
+    #[rstest]
+    fn test_write_u32_at_exact_boundary() -> Result<()> {
+        // Block size 12: indices 0-11
+        // Writing u32 (4 bytes) at offset 8 should succeed (writes to indices 8,9,10,11)
+        let mut page = PageBuilder::new().with_block_size(12).with_buffer().build();
+
+        page.write_u32(8, 999)?;
+        assert_eq!(page.read_u32(8)?, 999);
+        Ok(())
+    }
+
+    #[rstest]
+    fn test_write_u32_past_boundary_fails() {
+        // Block size 12: indices 0-11
+        // Writing u32 (4 bytes) at offset 9 should fail (would write to indices 9,10,11,12)
+        let mut page = PageBuilder::new().with_block_size(12).with_buffer().build();
+
+        let err = page.write_u32(9, 999);
+        assert!(err.is_err());
+    }
+
+    #[rstest]
+    fn test_read_u32_at_exact_boundary() -> Result<()> {
+        // Block size 20: indices 0-19
+        // Reading u32 (4 bytes) at offset 16 should succeed (reads from indices 16,17,18,19)
+        let mut page = PageBuilder::new().with_block_size(20).with_buffer().build();
+
+        page.write_u32(16, 777)?;
+        assert_eq!(page.read_u32(16)?, 777);
+        Ok(())
+    }
+
+    #[rstest]
+    fn test_read_u32_past_boundary_fails() {
+        // Block size 20: indices 0-19
+        // Reading u32 (4 bytes) at offset 17 should fail (would read from indices 17,18,19,20)
+        let page = PageBuilder::new().with_block_size(20).with_buffer().build();
+
+        let err = page.read_u32(17);
+        assert!(err.is_err());
+    }
+
+    #[rstest]
+    fn test_write_bytes_at_exact_boundary() -> Result<()> {
+        // Block size 10: indices 0-9
+        // Writing 3 bytes with 1-byte varint at offset 6 should succeed
+        // varint(1 byte) + data(3 bytes) = 4 bytes total, writes to indices 6,7,8,9
+        let mut page = PageBuilder::new().with_block_size(10).with_buffer().build();
+
+        let data = vec![1, 2, 3];
+        page.write_bytes(6, data.clone())?;
+        assert_eq!(page.read_bytes(6)?, data);
+        Ok(())
+    }
+
+    #[rstest]
+    fn test_write_bytes_past_boundary_fails() {
+        // Block size 10: indices 0-9
+        // Writing 3 bytes with 1-byte varint at offset 7 should fail
+        // varint(1 byte) + data(3 bytes) = 4 bytes total, would write to indices 7,8,9,10
+        let mut page = PageBuilder::new().with_block_size(10).with_buffer().build();
+
+        let data = vec![1, 2, 3];
+        let err = page.write_bytes(7, data);
+        assert!(err.is_err());
+    }
+
+    #[rstest]
+    fn test_read_bytes_at_exact_boundary() -> Result<()> {
+        // Block size 50: indices 0-49
+        // Writing 5 bytes with 1-byte varint at offset 44 should succeed
+        // varint(1 byte) + data(5 bytes) = 6 bytes total, writes to indices 44-49
+        let mut page = PageBuilder::new().with_block_size(50).with_buffer().build();
+
+        let data = vec![10, 20, 30, 40, 50];
+        page.write_bytes(44, data.clone())?;
+        assert_eq!(page.read_bytes(44)?, data);
+        Ok(())
+    }
+
+    #[rstest]
+    fn test_read_bytes_past_boundary_fails() {
+        // Block size 50: indices 0-49
+        // Writing 5 bytes with 1-byte varint at offset 45 should fail
+        // varint(1 byte) + data(5 bytes) = 6 bytes total, would write to indices 45-50
+        let mut page = PageBuilder::new().with_block_size(50).with_buffer().build();
+
+        let data = vec![10, 20, 30, 40, 50];
+        let err = page.write_bytes(45, data);
+        assert!(err.is_err());
+    }
+
+    #[rstest]
+    fn test_write_bytes_for_log_2_at_exact_boundary() -> Result<()> {
+        // Block size 20: indices 0-19
+        // Writing 4 bytes with 1-byte reversed varint at offset 15 should succeed
+        // data(4 bytes) + reversed varint(1 byte) = 5 bytes total, writes to indices 15-19
+        let mut page = PageBuilder::new().with_block_size(20).with_buffer().build();
+
+        let data = vec![100, 101, 102, 103];
+        let offset = 15;
+        page.write_bytes_for_log_2(offset, data.clone())?;
+
+        let bytes_len = data.len();
+        let varint_size = get_varint_len(bytes_len as u64);
+        let end_offset = offset + bytes_len + varint_size - 1;
+
+        assert_eq!(page.read_bytes_for_log_2(end_offset)?, data);
+        Ok(())
+    }
+
+    #[rstest]
+    fn test_write_bytes_for_log_2_past_boundary_fails() {
+        // Block size 20: indices 0-19
+        // Writing 4 bytes with 1-byte reversed varint at offset 16 should fail
+        // data(4 bytes) + reversed varint(1 byte) = 5 bytes total, would write to indices 16-20
+        let mut page = PageBuilder::new().with_block_size(20).with_buffer().build();
+
+        let data = vec![100, 101, 102, 103];
+        let err = page.write_bytes_for_log_2(16, data);
+        assert!(err.is_err());
     }
 }

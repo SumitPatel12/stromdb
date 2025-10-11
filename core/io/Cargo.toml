@@ -5,3 +5,6 @@ edition = "2024"
 
 [dependencies]
 rstest = "0.26.1"
+
+[dev-dependencies]
+tempdir = "0.3"
